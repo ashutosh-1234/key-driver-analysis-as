@@ -13,11 +13,11 @@ from page_04_target_selection import render_target_selection_page
 from page_05_feature_prep import render_feature_prep_page
 from page_06_feature_selection import render_feature_selection_page
 from page_07_factor_config import render_factor_config_page
-from page_08_factor_prep import render_factor_prep_page
+from page_08_factor_prep import show_page as render_factor_prep_page 
 from page_09_factor_execution import render_factor_execution_page
-from page_10_factor_viz import render_factor_viz_page
+from page_10_factor_viz import show_page as render_factor_viz_page
 from page_11_export import render_export_page
-from page_12_regression import render_regression_page
+from page_12_regression import show_page as render_regression_page
 
 # Configure page
 st.set_page_config(
