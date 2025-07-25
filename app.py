@@ -7,7 +7,7 @@ sys.path.append(str(Path(__file__).parent / "pages"))
 
 # Import all page modules
 from page_01_upload import render_upload_page
-from page_02_summary import render_summary_page
+from page_02_summary import show_page as render_summary_page
 from page_03_binary import render_binary_page
 from page_04_target_selection import render_target_selection_page
 from page_05_feature_prep import render_feature_prep_page
