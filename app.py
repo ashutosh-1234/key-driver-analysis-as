@@ -16,7 +16,7 @@ from page_07_factor_config import render_factor_config_page
 from page_08_factor_prep import show_page as render_factor_prep_page 
 from page_09_factor_execution import render_factor_execution_page
 from page_10_factor_viz import show_page as render_factor_viz_page
-from page_11_export import render_export_page
+from page_11_export import show_page as render_export_page
 from page_12_regression import show_page as render_regression_page
 from page_13_final import show_page as render_final_page
 
