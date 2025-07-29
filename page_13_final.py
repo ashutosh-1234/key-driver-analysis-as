@@ -22,7 +22,7 @@ def show_page():
         st.stop()
 
     model_results = st.session_state.model_results
-    coef_df = build_impact_df(model_results)
+    coef_df = build_impact_df(model_results, regression_model)
 
     # -------- Feature selector ---------------------------------------------
     st.subheader("✅ Select the final set of drivers to include")
@@ -64,14 +64,14 @@ def show_page():
 # === Helpers ===============================================================
 
 
-def build_impact_df(model_results: dict) -> pd.DataFrame:
+def build_impact_df(model_results: dict, regression_model) -> pd.DataFrame:
     """
     Combine coefficients + st.session_state.normalized_impacts (if present)
     into one tidy dataframe with positive-only ‘Impact_%’.
     """
     # 1/ start from coefficients
     coef = model_results["selected_features"]
-    betas = model_results["regression_model"].coef_[0]
+    betas = regression_model.coef_[0]
     base_df = pd.DataFrame({"Variable": coef, "Beta": betas})
 
     # 2/ normalise to % share of absolute impact
