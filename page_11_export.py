@@ -153,6 +153,5 @@ def create_summary_dataframe(fa_results: dict) -> pd.DataFrame:
 
 
 # -------------------------------------------------------------------------
-
 if __name__ == "__main__":
-    render_export_page()
+    show_page()
