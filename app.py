@@ -18,6 +18,7 @@ from page_09_factor_execution import render_factor_execution_page
 from page_10_factor_viz import show_page as render_factor_viz_page
 from page_11_export import render_export_page
 from page_12_regression import show_page as render_regression_page
+from page_13_final import show_page as render_final_page
 
 # Configure page
 st.set_page_config(
@@ -72,6 +73,7 @@ PAGES = [
     {"title": "📈 Step 10: Results Visualization", "function": render_factor_viz_page},
     {"title": "💾 Step 11: Export Results", "function": render_export_page},
     {"title": "📌 Step 12: Logistic Regression", "function": render_regression_page},
+    {"title": "📊 Step 13: Final Key Driver Summary", "function": render_final_page},
 ]
 
 def render_navigation():
