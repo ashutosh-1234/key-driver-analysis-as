@@ -101,116 +101,30 @@ def prepare_features_for_analysis():
     _display_feature_categories()
 
     # ── Full correlation table (ALL features) ───────────────────────────
- 
-# ── Correlation of all features with the three target columns ─────────
-
-st.subheader("🎯 Correlation with Target – LTIP / Overall Quality / Overall Perception")
- 
-# identify the three target columns (case-insensitive)
-
-ltip_col   = next((c for c in filtered_df.columns if 'ltip'               in c.lower()), None)
-
-rep_col    = next((c for c in filtered_df.columns if 'overall quality'    in c.lower()), None)
-
-percep_col = next((c for c in filtered_df.columns if 'overall perception' in c.lower()), None)
-
-target_cols = [( "LTIP", ltip_col ), ("Overall Quality", rep_col), ("Overall Perception", percep_col)]
- 
-# validate presence
-
-valid_targets = [(label, col) for label, col in target_cols if col and col in filtered_df.columns]
-
-missing = [label for label, col in target_cols if not (col and col in filtered_df.columns)]
-
-if missing:
-
-    st.warning(f"Could not find these target columns in the dataframe for correlation: {', '.join(missing)}")
- 
-# compute & display per-target correlation tables
-
-corr_tables = {}
-
-for label, target in valid_targets:
+    st.subheader("🎯 Correlation with Target – All Features")
 
     corr_rows = []
-
     for feat in st.session_state.feature_list:
-
         try:
-
-            c = filtered_df[feat].corr(filtered_df[target])
-
+            c = final_df[feat].corr(final_df[selected_target_col])
             corr_rows.append({
-
                 "Feature": feat,
-
                 "Correlation": c,
-
                 "Abs_Correlation": abs(c)
-
             })
-
         except Exception:
-
-            continue
+            pass
 
     if corr_rows:
-
-        df = (
-
+        corr_df = (
             pd.DataFrame(corr_rows)
-
             .sort_values("Abs_Correlation", ascending=False)
-
             .reset_index(drop=True)
-
             .loc[:, ["Feature", "Correlation"]]
-
         )
+        st.dataframe(corr_df, use_container_width=True)
 
-        st.markdown(f"**Target:** {label} (column: `{target}`)")
-
-        st.dataframe(df, use_container_width=True)
-
-        corr_tables[label] = df
- 
-# optional: aggregated view showing each feature's strongest correlation across the available targets
-
-if corr_tables:
-
-    aggregate = {}
-
-    for label, df in corr_tables.items():
-
-        for _, row in df.iterrows():
-
-            feat = row["Feature"]
-
-            corr = row["Correlation"]
-
-            if feat not in aggregate or abs(corr) > aggregate[feat]["Abs"]:
-
-                aggregate[feat] = {"Best Target": label, "Correlation": corr, "Abs": abs(corr)}
-
-    agg_df = pd.DataFrame([
-
-        {
-
-            "Feature": feat,
-
-            "Best Target": v["Best Target"],
-
-            "Correlation": v["Correlation"]
-
-        }
-
-        for feat, v in aggregate.items()
-
-    ]).sort_values("Correlation", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
- 
-    st.subheader("🔥 Top Features Across All Specified Targets (by max |correlation|)")
-
-    st.dataframe(agg_df, use_container_width=True)
+    st.info("📌 Features prepared successfully! Click **Next ➡️** to proceed to feature selection.")
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -247,3 +161,4 @@ def _display_feature_categories():
 # ──────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     render_feature_prep_page()
+
