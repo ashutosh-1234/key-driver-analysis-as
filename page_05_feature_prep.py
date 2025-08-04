@@ -108,19 +108,19 @@ st.subheader("🎯 Correlation with Target – LTIP / Overall Quality / Overall 
  
 # identify the three target columns (case-insensitive)
 
-ltip_col   = next((c for c in final_df.columns if 'ltip'               in c.lower()), None)
+ltip_col   = next((c for c in filtered_df.columns if 'ltip'               in c.lower()), None)
 
-rep_col    = next((c for c in final_df.columns if 'overall quality'    in c.lower()), None)
+rep_col    = next((c for c in filtered_df.columns if 'overall quality'    in c.lower()), None)
 
-percep_col = next((c for c in final_df.columns if 'overall perception' in c.lower()), None)
+percep_col = next((c for c in filtered_df.columns if 'overall perception' in c.lower()), None)
 
 target_cols = [( "LTIP", ltip_col ), ("Overall Quality", rep_col), ("Overall Perception", percep_col)]
  
 # validate presence
 
-valid_targets = [(label, col) for label, col in target_cols if col and col in final_df.columns]
+valid_targets = [(label, col) for label, col in target_cols if col and col in filtered_df.columns]
 
-missing = [label for label, col in target_cols if not (col and col in final_df.columns)]
+missing = [label for label, col in target_cols if not (col and col in filtered_df.columns)]
 
 if missing:
 
@@ -138,7 +138,7 @@ for label, target in valid_targets:
 
         try:
 
-            c = final_df[feat].corr(final_df[target])
+            c = filtered_df[feat].corr(filtered_df[target])
 
             corr_rows.append({
 
