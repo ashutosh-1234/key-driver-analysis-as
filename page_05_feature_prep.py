@@ -101,7 +101,6 @@ def prepare_features_for_analysis():
     _display_feature_categories()
 
     # ── Full correlation table (ALL features) ───────────────────────────
-Correl -
  
 # ── Correlation of all features with the three target columns ─────────
 
