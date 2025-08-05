@@ -39,50 +39,68 @@ def show_page():
         train_and_evaluate_model()
 
 def prepare_regression_data():
-    """
-    Build everything Step 12 needs:
-
-    • factor_scores_df  – the factors actually created
-    • raw_features_not_factored – every numeric feature that never became a factor
-    • y_target          – the binary target column
-    """
-
-    final_model_df      = st.session_state.get("final_model_df")
+    """Prepare data for regression with proper raw variable detection"""
+    
+    final_model_df = st.session_state.get("final_model_df")
     selected_target_col = st.session_state.get("selected_target_col")
-
-    # Basic guard-rails
+    
     if final_model_df is None or selected_target_col is None:
-        st.error("⚠️  Required data missing – please finish the previous steps first.")
+        st.error("⚠️ Required data missing – please complete previous steps first.")
         return
-
-    # 1⃣  Factors that DO exist
+    
+    # Get factor scores (if available)
     factor_scores_df = st.session_state.get("factor_scores_df", pd.DataFrame())
-
-    # 2⃣  Features that really fed any successful factor analysis
+    
+    # Get original feature list from Step 5
+    feature_list = st.session_state.get("feature_list", [])
+    
+    # Method 1: Check what features were actually used in successful factor analysis
     used_in_factors = set()
     fa_results = st.session_state.get("fa_results", {})
-    for res in fa_results.values():
-        if res and res.get("success", False):
-            used_in_factors.update(res.get("features", []))
-
-    # 3⃣  Full numeric feature list detected back in Step 5
-    feature_list = st.session_state.get("feature_list", [])
-
-    # 4⃣  Anything numeric that never became a factor = "raw"
-    raw_features_not_factored = [f for f in feature_list if f not in used_in_factors]
-
-    # (optional) keep only columns that really exist in the modelling dataframe
-    raw_features_not_factored = [f for f in raw_features_not_factored
-                                 if f in final_model_df.columns]
-
-    # 5⃣  Target column (already binary)
+    
+    if fa_results:
+        for category_name, results in fa_results.items():
+            if results is not None and isinstance(results, dict):
+                if results.get("success", False):
+                    category_features = results.get("features", [])
+                    used_in_factors.update(category_features)
+    
+    # Method 2: Also check selected features that might not have been factored
+    selected_features = st.session_state.get("selected_features", [])
+    
+    # Find raw features: original features that exist in final_model_df but weren't successfully factored
+    available_columns = final_model_df.columns.tolist()
+    raw_features_not_factored = []
+    
+    # Include features from feature_list that weren't successfully factored
+    for feature in feature_list:
+        if feature in available_columns and feature != selected_target_col and feature not in used_in_factors:
+            raw_features_not_factored.append(feature)
+    
+    # Also include selected_features that weren't successfully factored
+    for feature in selected_features:
+        if (feature in available_columns and 
+            feature != selected_target_col and 
+            feature not in used_in_factors and 
+            feature not in raw_features_not_factored):
+            raw_features_not_factored.append(feature)
+    
+    # Debug information
+    st.write("**🔍 Debug Info:**")
+    st.write(f"- Total original features: {len(feature_list)}")
+    st.write(f"- Features used in factors: {len(used_in_factors)}")
+    st.write(f"- Raw features found: {len(raw_features_not_factored)}")
+    if raw_features_not_factored:
+        st.write(f"- Sample raw features: {raw_features_not_factored[:5]}")
+    
+    # Prepare target variable
     y_target = final_model_df[selected_target_col].reset_index(drop=True)
-
-    # 6⃣  Store everything for later steps
-    st.session_state.factor_scores_df          = factor_scores_df
+    
+    # Store everything for later steps
+    st.session_state.factor_scores_df = factor_scores_df
     st.session_state.raw_features_not_factored = raw_features_not_factored
-    st.session_state.y_target                  = y_target
-    st.session_state.final_model_df            = final_model_df
+    st.session_state.y_target = y_target
+    st.session_state.final_model_df = final_model_df
 
 def display_data_summary():
     """Display comprehensive data preparation summary"""
@@ -143,14 +161,13 @@ def enhanced_variable_selection_interface():
     
     factor_scores_df = st.session_state.get('factor_scores_df', pd.DataFrame())
     raw_features_not_factored = st.session_state.get('raw_features_not_factored', [])
-    final_model_df = st.session_state.get('final_model_df')
     
-    # Initialize selections
-    if 'selected_factored_features' not in st.session_state:
-        st.session_state.selected_factored_features = list(factor_scores_df.columns) if not factor_scores_df.empty else []
+    # Initialize selections with proper keys to avoid conflicts
+    if 'selected_factored_features_v2' not in st.session_state:
+        st.session_state.selected_factored_features_v2 = list(factor_scores_df.columns) if not factor_scores_df.empty else []
     
-    if 'selected_raw_features' not in st.session_state:
-        st.session_state.selected_raw_features = []
+    if 'selected_raw_features_v2' not in st.session_state:
+        st.session_state.selected_raw_features_v2 = []
     
     # Create tabs for different variable types
     tab1, tab2, tab3 = st.tabs(["🔬 Factored Variables", "📊 Raw Variables", "📋 Selection Summary"])
@@ -176,43 +193,44 @@ def enhanced_variable_selection_interface():
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                if st.button("✅ Select All Factored", key="select_all_factored"):
-                    st.session_state.selected_factored_features = list(factor_scores_df.columns)
+                if st.button("✅ Select All Factored", key="select_all_factored_v2"):
+                    st.session_state.selected_factored_features_v2 = list(factor_scores_df.columns)
                     st.rerun()
             
             with col2:
-                if st.button("❌ Deselect All Factored", key="deselect_all_factored"):
-                    st.session_state.selected_factored_features = []
+                if st.button("❌ Deselect All Factored", key="deselect_all_factored_v2"):
+                    st.session_state.selected_factored_features_v2 = []
                     st.rerun()
             
             with col3:
                 # Remove high VIF if analysis was done
                 if 'vif_results' in st.session_state:
-                    if st.button("🧹 Remove High VIF Factored", key="remove_vif_factored"):
+                    if st.button("🧹 Remove High VIF Factored", key="remove_vif_factored_v2"):
                         vif_results = st.session_state.vif_results
                         high_vif_vars = vif_results[vif_results['VIF'] > 10]['Variable'].tolist()
                         high_vif_vars = [var for var in high_vif_vars if var != 'const']
-                        st.session_state.selected_factored_features = [
-                            var for var in st.session_state.selected_factored_features 
+                        st.session_state.selected_factored_features_v2 = [
+                            var for var in st.session_state.selected_factored_features_v2 
                             if var not in high_vif_vars
                         ]
                         st.rerun()
             
             # Individual factored variable selection by category
-            selected_factored = []
             for category, factors in factored_categories.items():
                 st.write(f"**{category} Factors:**")
                 for factor in factors:
+                    # Use session state for checkbox values
+                    checkbox_key = f"factored_v2_{factor}"
+                    if checkbox_key not in st.session_state:
+                        st.session_state[checkbox_key] = factor in st.session_state.selected_factored_features_v2
+                    
                     selected = st.checkbox(
                         factor,
-                        value=factor in st.session_state.selected_factored_features,
-                        key=f"factored_{factor}"
+                        value=st.session_state[checkbox_key],
+                        key=checkbox_key,
+                        on_change=update_factored_selection,
+                        args=(factor,)
                     )
-                    if selected:
-                        selected_factored.append(factor)
-            
-            st.session_state.selected_factored_features = selected_factored
-            
         else:
             st.info("ℹ️ No factored variables available. Factor analysis may not have been completed.")
     
@@ -220,6 +238,9 @@ def enhanced_variable_selection_interface():
         st.write("**Select raw variables that were not included in factor analysis:**")
         
         if raw_features_not_factored:
+            # Show total count
+            st.write(f"**Found {len(raw_features_not_factored)} raw variables available for selection**")
+            
             # Categorize raw features
             raw_categories = {
                 'Rep Attributes': [f for f in raw_features_not_factored if "Rep Attributes" in f],
@@ -232,50 +253,73 @@ def enhanced_variable_selection_interface():
             # Remove empty categories
             raw_categories = {k: v for k, v in raw_categories.items() if v}
             
-            # Show debug info
-            st.write(f"**Debug Info:** Found {len(raw_features_not_factored)} raw features")
-            
             # Bulk selection for raw variables
             col1, col2 = st.columns(2)
             
             with col1:
-                if st.button("✅ Select All Raw", key="select_all_raw"):
-                    st.session_state.selected_raw_features = raw_features_not_factored.copy()
+                if st.button("✅ Select All Raw", key="select_all_raw_v2"):
+                    st.session_state.selected_raw_features_v2 = raw_features_not_factored.copy()
+                    # Update all checkbox states
+                    for feature in raw_features_not_factored:
+                        st.session_state[f"raw_v2_{feature}"] = True
                     st.rerun()
             
             with col2:
-                if st.button("❌ Deselect All Raw", key="deselect_all_raw"):
-                    st.session_state.selected_raw_features = []
+                if st.button("❌ Deselect All Raw", key="deselect_all_raw_v2"):
+                    st.session_state.selected_raw_features_v2 = []
+                    # Update all checkbox states
+                    for feature in raw_features_not_factored:
+                        st.session_state[f"raw_v2_{feature}"] = False
                     st.rerun()
             
             # Individual raw variable selection by category
-            selected_raw = []
             for category, features in raw_categories.items():
                 if features:
                     st.write(f"**{category} ({len(features)} variables):**")
-                    with st.expander(f"View {category} variables"):
+                    with st.expander(f"View {category} variables", expanded=True):
                         for feature in features:
+                            checkbox_key = f"raw_v2_{feature}"
+                            if checkbox_key not in st.session_state:
+                                st.session_state[checkbox_key] = feature in st.session_state.selected_raw_features_v2
+                            
                             selected = st.checkbox(
                                 feature,
-                                value=feature in st.session_state.selected_raw_features,
-                                key=f"raw_{feature}"
+                                value=st.session_state[checkbox_key],
+                                key=checkbox_key,
+                                on_change=update_raw_selection,
+                                args=(feature,)
                             )
-                            if selected:
-                                selected_raw.append(feature)
-            
-            st.session_state.selected_raw_features = selected_raw
-            
         else:
             st.info("ℹ️ All original features were included in factor analysis. No raw features available.")
     
     with tab3:
         display_selection_summary()
 
+def update_factored_selection(factor):
+    """Update factored features selection"""
+    checkbox_key = f"factored_v2_{factor}"
+    if st.session_state[checkbox_key]:
+        if factor not in st.session_state.selected_factored_features_v2:
+            st.session_state.selected_factored_features_v2.append(factor)
+    else:
+        if factor in st.session_state.selected_factored_features_v2:
+            st.session_state.selected_factored_features_v2.remove(factor)
+
+def update_raw_selection(feature):
+    """Update raw features selection"""
+    checkbox_key = f"raw_v2_{feature}"
+    if st.session_state[checkbox_key]:
+        if feature not in st.session_state.selected_raw_features_v2:
+            st.session_state.selected_raw_features_v2.append(feature)
+    else:
+        if feature in st.session_state.selected_raw_features_v2:
+            st.session_state.selected_raw_features_v2.remove(feature)
+
 def display_selection_summary():
     """Display comprehensive selection summary"""
     
-    selected_factored = st.session_state.get('selected_factored_features', [])
-    selected_raw = st.session_state.get('selected_raw_features', [])
+    selected_factored = st.session_state.get('selected_factored_features_v2', [])
+    selected_raw = st.session_state.get('selected_raw_features_v2', [])
     
     st.write("**📊 Variable Selection Summary**")
     
@@ -306,20 +350,19 @@ def display_selection_summary():
         st.warning("⚠️ No variables selected for modeling!")
 
 def calculate_vif_analysis():
-    """Calculate VIF with bulletproof error handling and validation"""
+    """Calculate VIF with proper variable handling"""
     
     st.write("🔄 Starting VIF analysis...")
     
     # Get selected variables
-    selected_factored = st.session_state.get('selected_factored_features', [])
-    selected_raw = st.session_state.get('selected_raw_features', [])
+    selected_factored = st.session_state.get('selected_factored_features_v2', [])
+    selected_raw = st.session_state.get('selected_raw_features_v2', [])
     
     if not selected_factored and not selected_raw:
         st.error("⚠️ Please select at least one variable for VIF analysis.")
         return
     
     try:
-        # Initialize empty dataframe for combined data
         combined_data = pd.DataFrame()
         data_sources = []
         
@@ -329,31 +372,18 @@ def calculate_vif_analysis():
             st.write(f"📊 Processing {len(selected_factored)} factored variables...")
             
             if not factor_scores_df.empty:
-                # Get available factored columns
-                available_factored_cols = factor_scores_df.columns.tolist()
-                valid_factored = []
-                
-                for col in selected_factored:
-                    if col in available_factored_cols:
-                        valid_factored.append(col)
-                    else:
-                        st.warning(f"⚠️ Factored variable not found: {col}")
+                valid_factored = [col for col in selected_factored if col in factor_scores_df.columns]
                 
                 if valid_factored:
                     try:
                         factored_subset = factor_scores_df[valid_factored].reset_index(drop=True)
-                        # Ensure all data is numeric
                         factored_subset = factored_subset.select_dtypes(include=[np.number])
                         
                         if not factored_subset.empty:
                             combined_data = pd.concat([combined_data, factored_subset], axis=1)
                             data_sources.append(f"✅ Added {len(factored_subset.columns)} factored variables")
-                        else:
-                            st.warning("⚠️ No numeric factored variables found")
                     except Exception as e:
                         st.error(f"❌ Error processing factored variables: {str(e)}")
-            else:
-                st.warning("⚠️ Factor scores dataframe is empty")
         
         # Process raw variables
         if selected_raw:
@@ -361,54 +391,38 @@ def calculate_vif_analysis():
             st.write(f"📊 Processing {len(selected_raw)} raw variables...")
             
             if final_model_df is not None and not final_model_df.empty:
-                # Get available raw columns
-                available_raw_cols = final_model_df.columns.tolist()
-                valid_raw = []
-                
-                for col in selected_raw:
-                    if col in available_raw_cols:
-                        valid_raw.append(col)
-                    else:
-                        st.warning(f"⚠️ Raw variable not found: {col}")
+                valid_raw = [col for col in selected_raw if col in final_model_df.columns]
                 
                 if valid_raw:
                     try:
                         raw_subset = final_model_df[valid_raw].reset_index(drop=True)
-                        # Ensure all data is numeric
                         raw_subset = raw_subset.select_dtypes(include=[np.number])
                         
                         if not raw_subset.empty:
-                            # Handle missing values
                             raw_subset = raw_subset.fillna(raw_subset.median())
                             combined_data = pd.concat([combined_data, raw_subset], axis=1)
                             data_sources.append(f"✅ Added {len(raw_subset.columns)} raw variables")
-                        else:
-                            st.warning("⚠️ No numeric raw variables found")
                     except Exception as e:
                         st.error(f"❌ Error processing raw variables: {str(e)}")
-            else:
-                st.warning("⚠️ Final model dataframe is empty")
         
         # Display data source summary
         st.write("**Data Sources:**")
         for source in data_sources:
             st.write(source)
         
-        # Check if we have any data
         if combined_data.empty:
-            st.error("❌ No valid numeric data available for VIF calculation. Please check your variable selections.")
+            st.error("❌ No valid numeric data available for VIF calculation.")
             return
         
         st.write(f"📈 Combined dataset shape: {combined_data.shape}")
-        st.write(f"📊 Variables for VIF: {list(combined_data.columns)}")
         
-        # Handle any remaining missing values
+        # Handle missing values and constant columns
         missing_count = combined_data.isnull().sum().sum()
         if missing_count > 0:
             st.write(f"⚠️ Found {missing_count} missing values, filling with median...")
             combined_data = combined_data.fillna(combined_data.median())
         
-        # Check for constant columns (zero variance)
+        # Check for constant columns
         constant_cols = []
         for col in combined_data.columns:
             if combined_data[col].nunique() <= 1:
@@ -444,11 +458,10 @@ def calculate_vif_analysis():
             try:
                 vif_val = variance_inflation_factor(X_with_const.values, i)
                 
-                # Handle problematic VIF values
                 if np.isnan(vif_val) or np.isinf(vif_val):
-                    vif_val = 999.9  # Large value to indicate problem
+                    vif_val = 999.9
                 elif vif_val > 1000:
-                    vif_val = 999.9  # Cap extremely large values
+                    vif_val = 999.9
                 
                 vif_values.append(vif_val)
                 st.write(f"  ✓ {col}: {vif_val:.2f}")
@@ -458,10 +471,7 @@ def calculate_vif_analysis():
                 vif_values.append(np.nan)
         
         vif_data["VIF"] = vif_values
-        
-        # Remove rows with NaN VIF values for sorting
-        vif_data_clean = vif_data.dropna()
-        vif_data_clean = vif_data_clean.sort_values('VIF', ascending=False)
+        vif_data_clean = vif_data.dropna().sort_values('VIF', ascending=False)
         
         # Display results
         st.success("✅ VIF calculation completed!")
@@ -478,81 +488,63 @@ def calculate_vif_analysis():
         
         with col1:
             st.metric("High VIF (>10)", len(high_vif), help="May indicate multicollinearity")
-        
         with col2:
             st.metric("Moderate VIF (5-10)", len(moderate_vif), help="Moderate multicollinearity")
-        
         with col3:
             st.metric("Low VIF (≤5)", len(low_vif), help="Low multicollinearity")
         
         # Recommendations
         if len(high_vif) > 0:
-            st.warning("⚠️ **Recommendation:** Consider removing variables with VIF > 10 to reduce multicollinearity")
+            st.warning("⚠️ **Recommendation:** Consider removing variables with VIF > 10")
             st.write("**High VIF Variables:**")
             for _, row in high_vif.iterrows():
                 st.write(f"• {row['Variable']}: {row['VIF']:.2f}")
         else:
-            st.success("✅ **Good:** No high multicollinearity detected among selected variables")
+            st.success("✅ **Good:** No high multicollinearity detected")
         
         # Store VIF results
         st.session_state.vif_results = vif_data_clean
         
     except Exception as e:
         st.error(f"❌ Unexpected error in VIF calculation: {str(e)}")
-        
-        # Debug information
-        st.write("**🔍 Debug Information:**")
-        try:
-            st.write(f"- Selected factored features: {len(st.session_state.get('selected_factored_features', []))}")
-            st.write(f"- Selected raw features: {len(st.session_state.get('selected_raw_features', []))}")
-            
-            factor_scores_df = st.session_state.get('factor_scores_df', pd.DataFrame())
-            if not factor_scores_df.empty:
-                st.write(f"- Factor scores shape: {factor_scores_df.shape}")
-                st.write(f"- Factor scores columns: {list(factor_scores_df.columns)}")
-            
-            final_model_df = st.session_state.get('final_model_df')
-            if final_model_df is not None and not final_model_df.empty:
-                st.write(f"- Final model df shape: {final_model_df.shape}")
-                st.write(f"- Sample columns: {list(final_model_df.columns)[:10]}")
-            
-        except Exception as debug_e:
-            st.write(f"Could not generate debug info: {str(debug_e)}")
 
 def train_and_evaluate_model():
-    """Train logistic regression with combined variable set"""
+    """Train logistic regression with proper error handling"""
     
-    selected_factored = st.session_state.get('selected_factored_features', [])
-    selected_raw = st.session_state.get('selected_raw_features', [])
+    selected_factored = st.session_state.get('selected_factored_features_v2', [])
+    selected_raw = st.session_state.get('selected_raw_features_v2', [])
     
     if not selected_factored and not selected_raw:
         st.error("⚠️ Please select at least one variable for modeling.")
         return
     
     try:
-        # Combine data from different sources with validation
+        # Initialize combined data
         X_combined = pd.DataFrame()
         
-        # Add factored variables with validation
-        factor_scores_df = st.session_state.get('factor_scores_df', pd.DataFrame())
-        if not factor_scores_df.empty and selected_factored:
-            valid_factored = [col for col in selected_factored if col in factor_scores_df.columns]
-            if valid_factored:
-                factored_data = factor_scores_df[valid_factored].reset_index(drop=True)
-                X_combined = pd.concat([X_combined, factored_data], axis=1)
+        # Add factored variables
+        if selected_factored:
+            factor_scores_df = st.session_state.get('factor_scores_df', pd.DataFrame())
+            if not factor_scores_df.empty:
+                valid_factored = [col for col in selected_factored if col in factor_scores_df.columns]
+                if valid_factored:
+                    factored_data = factor_scores_df[valid_factored].reset_index(drop=True)
+                    X_combined = pd.concat([X_combined, factored_data], axis=1)
+                    st.write(f"✅ Added {len(valid_factored)} factored variables")
         
-        # Add raw variables with validation
-        final_model_df = st.session_state.get('final_model_df')
-        if final_model_df is not None and not final_model_df.empty and selected_raw:
-            valid_raw = [col for col in selected_raw if col in final_model_df.columns]
-            if valid_raw:
-                raw_data = final_model_df[valid_raw].reset_index(drop=True)
-                # Fill missing values in raw data
-                raw_data = raw_data.fillna(raw_data.median())
-                X_combined = pd.concat([X_combined, raw_data], axis=1)
+        # Add raw variables
+        if selected_raw:
+            final_model_df = st.session_state.get('final_model_df')
+            if final_model_df is not None and not final_model_df.empty:
+                valid_raw = [col for col in selected_raw if col in final_model_df.columns]
+                if valid_raw:
+                    raw_data = final_model_df[valid_raw].reset_index(drop=True)
+                    raw_data = raw_data.fillna(raw_data.median())
+                    X_combined = pd.concat([X_combined, raw_data], axis=1)
+                    st.write(f"✅ Added {len(valid_raw)} raw variables")
         
         if X_combined.empty:
-            st.error("⚠️ No valid data available for modeling.")
+            st.error("⚠️ No valid variables found for modeling.")
             return
         
         # Get target variable
@@ -565,6 +557,9 @@ def train_and_evaluate_model():
         min_length = min(len(X_combined), len(y_target))
         X_combined = X_combined.iloc[:min_length]
         y_target = y_target.iloc[:min_length]
+        
+        st.write(f"📊 Final dataset shape: {X_combined.shape}")
+        st.write(f"🎯 Target variable shape: {y_target.shape}")
         
         # Split data
         X_train, X_test, y_train, y_test = train_test_split(
@@ -589,7 +584,7 @@ def train_and_evaluate_model():
             'selected_features': list(X_combined.columns),
             'selected_factored_features': selected_factored,
             'selected_raw_features': selected_raw,
-            'regression_model': model  # Add model to results for Step 13
+            'regression_model': model
         }
         
         # Mark step as completed
@@ -603,7 +598,16 @@ def train_and_evaluate_model():
         
     except Exception as e:
         st.error(f"❌ Error in model training: {str(e)}")
-        st.write("Please check your variable selections and data quality.")
+        
+        # Debug information
+        st.write("**🔍 Debug Information:**")
+        st.write(f"- Selected factored: {len(selected_factored)}")
+        st.write(f"- Selected raw: {len(selected_raw)}")
+        
+        if 'X_combined' in locals():
+            st.write(f"- Combined data shape: {X_combined.shape}")
+        if 'y_target' in locals():
+            st.write(f"- Target shape: {y_target.shape}")
 
 def display_model_results(model, X_train, X_test, y_train, y_test, y_pred, y_pred_proba, 
                          all_features, selected_factored, selected_raw):
@@ -611,7 +615,7 @@ def display_model_results(model, X_train, X_test, y_train, y_test, y_pred, y_pre
     
     st.subheader("🎯 Model Performance Results")
     
-    # Model coefficients (Key Drivers) with variable type identification
+    # Model coefficients
     st.subheader("🔑 Key Driver Analysis - Variable Importance")
     
     coefficients = pd.DataFrame({
@@ -621,7 +625,7 @@ def display_model_results(model, X_train, X_test, y_train, y_test, y_pred, y_pre
         'Variable_Type': ['Factored' if var in selected_factored else 'Raw' for var in all_features]
     }).sort_values('Abs_Coefficient', ascending=False)
     
-    # Create enhanced horizontal bar chart
+    # Create bar chart
     fig = px.bar(
         coefficients,
         y='Variable',
@@ -634,14 +638,13 @@ def display_model_results(model, X_train, X_test, y_train, y_test, y_pred, y_pre
     fig.update_layout(height=max(400, len(all_features) * 25))
     st.plotly_chart(fig, use_container_width=True)
     
-    # Enhanced coefficients table
+    # Coefficients table
     st.write("**Detailed Coefficients by Variable Type:**")
     st.dataframe(coefficients[['Variable', 'Coefficient', 'Variable_Type']].round(4), use_container_width=True)
     
     # Model performance metrics
     st.subheader("📊 Model Performance Metrics")
     
-    # Calculate metrics
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
     
     accuracy = accuracy_score(y_test, y_pred)
@@ -667,7 +670,6 @@ def display_model_results(model, X_train, X_test, y_train, y_test, y_pred, y_pre
     col1, col2 = st.columns(2)
     
     with col1:
-        # Confusion Matrix
         cm = confusion_matrix(y_test, y_pred)
         fig = px.imshow(
             cm,
@@ -680,7 +682,6 @@ def display_model_results(model, X_train, X_test, y_train, y_test, y_pred, y_pre
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        # ROC Curve
         fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
         
         fig = go.Figure()
@@ -706,8 +707,8 @@ def display_model_results(model, X_train, X_test, y_train, y_test, y_pred, y_pre
         
         st.plotly_chart(fig, use_container_width=True)
     
-    # Enhanced Feature importance summary by type
-    st.subheader("🏆 Top Key Drivers Summary by Variable Type")
+    # Top drivers summary
+    st.subheader("🏆 Top Key Drivers Summary")
     
     col1, col2 = st.columns(2)
     
@@ -731,8 +732,8 @@ def display_model_results(model, X_train, X_test, y_train, y_test, y_pred, y_pre
         else:
             st.write("No raw variables selected")
     
-    # Enhanced Model summary
-    st.subheader("📈 Enhanced Model Summary")
+    # Model summary
+    st.subheader("📈 Model Summary")
     
     col1, col2 = st.columns(2)
     
