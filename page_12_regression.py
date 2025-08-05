@@ -39,38 +39,50 @@ def show_page():
         train_and_evaluate_model()
 
 def prepare_regression_data():
-    """Prepare data for logistic regression with both factored and raw variables"""
-    
-    final_model_df = st.session_state.get('final_model_df')
-    selected_target_col = st.session_state.get('selected_target_col')
-    
+    """
+    Build everything Step 12 needs:
+
+    • factor_scores_df  – the factors actually created
+    • raw_features_not_factored – every numeric feature that never became a factor
+    • y_target          – the binary target column
+    """
+
+    final_model_df      = st.session_state.get("final_model_df")
+    selected_target_col = st.session_state.get("selected_target_col")
+
+    # Basic guard-rails
     if final_model_df is None or selected_target_col is None:
-        st.error("⚠️ Required data not available. Please complete previous steps.")
+        st.error("⚠️  Required data missing – please finish the previous steps first.")
         return
-    
-    # Get factored variables (if available)
-    factor_scores_df = st.session_state.get('factor_scores_df', pd.DataFrame())
-    
-    # Get all original features that were available for modeling
-    original_features = st.session_state.get('feature_list', [])
-    selected_features_for_fa = st.session_state.get('selected_features', [])
-    
-    # Identify raw features that were NOT included in factor analysis
-    raw_features_not_factored = [f for f in original_features if f not in selected_features_for_fa]
-    
-    # ✅ CRITICAL FIX: Validate that raw features exist in final_model_df
-    if not final_model_df.empty:
-        available_columns = final_model_df.columns.tolist()
-        raw_features_not_factored = [f for f in raw_features_not_factored if f in available_columns]
-    
-    # Prepare target variable
+
+    # 1⃣  Factors that DO exist
+    factor_scores_df = st.session_state.get("factor_scores_df", pd.DataFrame())
+
+    # 2⃣  Features that really fed any successful factor analysis
+    used_in_factors = set()
+    fa_results = st.session_state.get("fa_results", {})
+    for res in fa_results.values():
+        if res and res.get("success", False):
+            used_in_factors.update(res.get("features", []))
+
+    # 3⃣  Full numeric feature list detected back in Step 5
+    feature_list = st.session_state.get("feature_list", [])
+
+    # 4⃣  Anything numeric that never became a factor = "raw"
+    raw_features_not_factored = [f for f in feature_list if f not in used_in_factors]
+
+    # (optional) keep only columns that really exist in the modelling dataframe
+    raw_features_not_factored = [f for f in raw_features_not_factored
+                                 if f in final_model_df.columns]
+
+    # 5⃣  Target column (already binary)
     y_target = final_model_df[selected_target_col].reset_index(drop=True)
-    
-    # Store all available variable sources in session state
-    st.session_state.factor_scores_df = factor_scores_df
+
+    # 6⃣  Store everything for later steps
+    st.session_state.factor_scores_df          = factor_scores_df
     st.session_state.raw_features_not_factored = raw_features_not_factored
-    st.session_state.y_target = y_target
-    st.session_state.final_model_df = final_model_df
+    st.session_state.y_target                  = y_target
+    st.session_state.final_model_df            = final_model_df
 
 def display_data_summary():
     """Display comprehensive data preparation summary"""
@@ -219,6 +231,9 @@ def enhanced_variable_selection_interface():
             
             # Remove empty categories
             raw_categories = {k: v for k, v in raw_categories.items() if v}
+            
+            # Show debug info
+            st.write(f"**Debug Info:** Found {len(raw_features_not_factored)} raw features")
             
             # Bulk selection for raw variables
             col1, col2 = st.columns(2)
