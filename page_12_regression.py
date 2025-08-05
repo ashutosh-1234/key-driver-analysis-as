@@ -60,7 +60,8 @@ def prepare_regression_data():
     
     # ✅ CRITICAL FIX: Validate that raw features exist in final_model_df
     if not final_model_df.empty:
-        raw_features_not_factored = [f for f in raw_features_not_factored if f in final_model_df.columns]
+        available_columns = final_model_df.columns.tolist()
+        raw_features_not_factored = [f for f in raw_features_not_factored if f in available_columns]
     
     # Prepare target variable
     y_target = final_model_df[selected_target_col].reset_index(drop=True)
@@ -290,8 +291,11 @@ def display_selection_summary():
         st.warning("⚠️ No variables selected for modeling!")
 
 def calculate_vif_analysis():
-    """Calculate VIF for selected variables with proper error handling"""
+    """Calculate VIF with bulletproof error handling and validation"""
     
+    st.write("🔄 Starting VIF analysis...")
+    
+    # Get selected variables
     selected_factored = st.session_state.get('selected_factored_features', [])
     selected_raw = st.session_state.get('selected_raw_features', [])
     
@@ -300,86 +304,160 @@ def calculate_vif_analysis():
         return
     
     try:
-        # Combine data from different sources with validation
+        # Initialize empty dataframe for combined data
         combined_data = pd.DataFrame()
+        data_sources = []
         
-        # ✅ CRITICAL FIX: Validate factored variables exist in factor_scores_df
-        factor_scores_df = st.session_state.get('factor_scores_df', pd.DataFrame())
-        if not factor_scores_df.empty and selected_factored:
-            # Filter to only existing columns
-            valid_factored = [col for col in selected_factored if col in factor_scores_df.columns]
+        # Process factored variables
+        if selected_factored:
+            factor_scores_df = st.session_state.get('factor_scores_df', pd.DataFrame())
+            st.write(f"📊 Processing {len(selected_factored)} factored variables...")
             
-            if valid_factored:
-                factored_data = factor_scores_df[valid_factored].reset_index(drop=True)
-                combined_data = pd.concat([combined_data, factored_data], axis=1)
+            if not factor_scores_df.empty:
+                # Get available factored columns
+                available_factored_cols = factor_scores_df.columns.tolist()
+                valid_factored = []
                 
-                if len(valid_factored) != len(selected_factored):
-                    missing_factored = [col for col in selected_factored if col not in valid_factored]
-                    st.warning(f"⚠️ Some factored variables not found: {missing_factored}")
+                for col in selected_factored:
+                    if col in available_factored_cols:
+                        valid_factored.append(col)
+                    else:
+                        st.warning(f"⚠️ Factored variable not found: {col}")
+                
+                if valid_factored:
+                    try:
+                        factored_subset = factor_scores_df[valid_factored].reset_index(drop=True)
+                        # Ensure all data is numeric
+                        factored_subset = factored_subset.select_dtypes(include=[np.number])
+                        
+                        if not factored_subset.empty:
+                            combined_data = pd.concat([combined_data, factored_subset], axis=1)
+                            data_sources.append(f"✅ Added {len(factored_subset.columns)} factored variables")
+                        else:
+                            st.warning("⚠️ No numeric factored variables found")
+                    except Exception as e:
+                        st.error(f"❌ Error processing factored variables: {str(e)}")
             else:
-                st.warning("⚠️ None of the selected factored variables were found in factor scores.")
+                st.warning("⚠️ Factor scores dataframe is empty")
         
-        # ✅ CRITICAL FIX: Validate raw variables exist in final_model_df
-        final_model_df = st.session_state.get('final_model_df')
-        if final_model_df is not None and not final_model_df.empty and selected_raw:
-            # Filter to only existing columns
-            valid_raw = [col for col in selected_raw if col in final_model_df.columns]
+        # Process raw variables
+        if selected_raw:
+            final_model_df = st.session_state.get('final_model_df')
+            st.write(f"📊 Processing {len(selected_raw)} raw variables...")
             
-            if valid_raw:
-                raw_data = final_model_df[valid_raw].reset_index(drop=True)
-                # Fill missing values in raw data
-                raw_data = raw_data.fillna(raw_data.median())
-                combined_data = pd.concat([combined_data, raw_data], axis=1)
+            if final_model_df is not None and not final_model_df.empty:
+                # Get available raw columns
+                available_raw_cols = final_model_df.columns.tolist()
+                valid_raw = []
                 
-                if len(valid_raw) != len(selected_raw):
-                    missing_raw = [col for col in selected_raw if col not in valid_raw]
-                    st.warning(f"⚠️ Some raw variables not found: {missing_raw}")
+                for col in selected_raw:
+                    if col in available_raw_cols:
+                        valid_raw.append(col)
+                    else:
+                        st.warning(f"⚠️ Raw variable not found: {col}")
+                
+                if valid_raw:
+                    try:
+                        raw_subset = final_model_df[valid_raw].reset_index(drop=True)
+                        # Ensure all data is numeric
+                        raw_subset = raw_subset.select_dtypes(include=[np.number])
+                        
+                        if not raw_subset.empty:
+                            # Handle missing values
+                            raw_subset = raw_subset.fillna(raw_subset.median())
+                            combined_data = pd.concat([combined_data, raw_subset], axis=1)
+                            data_sources.append(f"✅ Added {len(raw_subset.columns)} raw variables")
+                        else:
+                            st.warning("⚠️ No numeric raw variables found")
+                    except Exception as e:
+                        st.error(f"❌ Error processing raw variables: {str(e)}")
             else:
-                st.warning("⚠️ None of the selected raw variables were found in the dataset.")
+                st.warning("⚠️ Final model dataframe is empty")
         
+        # Display data source summary
+        st.write("**Data Sources:**")
+        for source in data_sources:
+            st.write(source)
+        
+        # Check if we have any data
         if combined_data.empty:
-            st.error("⚠️ No valid data available for VIF calculation. Please check your variable selections.")
+            st.error("❌ No valid numeric data available for VIF calculation. Please check your variable selections.")
             return
         
-        # Ensure all data is numeric and handle any remaining missing values
-        combined_data = combined_data.select_dtypes(include=[np.number])
-        combined_data = combined_data.fillna(combined_data.median())
+        st.write(f"📈 Combined dataset shape: {combined_data.shape}")
+        st.write(f"📊 Variables for VIF: {list(combined_data.columns)}")
+        
+        # Handle any remaining missing values
+        missing_count = combined_data.isnull().sum().sum()
+        if missing_count > 0:
+            st.write(f"⚠️ Found {missing_count} missing values, filling with median...")
+            combined_data = combined_data.fillna(combined_data.median())
+        
+        # Check for constant columns (zero variance)
+        constant_cols = []
+        for col in combined_data.columns:
+            if combined_data[col].nunique() <= 1:
+                constant_cols.append(col)
+        
+        if constant_cols:
+            st.warning(f"⚠️ Removing constant columns: {constant_cols}")
+            combined_data = combined_data.drop(columns=constant_cols)
         
         if combined_data.empty:
-            st.error("⚠️ No numeric data available for VIF calculation.")
+            st.error("❌ No valid data remaining after preprocessing.")
             return
         
-        # Add constant for VIF calculation
-        X_with_const = sm.add_constant(combined_data)
+        # Check minimum requirements for VIF
+        if combined_data.shape[1] < 2:
+            st.error("❌ Need at least 2 variables for VIF calculation.")
+            return
         
-        # Calculate VIF
+        if combined_data.shape[0] < combined_data.shape[1] + 1:
+            st.error(f"❌ Insufficient observations ({combined_data.shape[0]}) for {combined_data.shape[1]} variables.")
+            return
+        
+        # Add constant term for VIF calculation
+        st.write("🔢 Adding constant term and calculating VIF...")
+        X_with_const = sm.add_constant(combined_data, has_constant='add')
+        
+        # Calculate VIF values
         vif_data = pd.DataFrame()
-        vif_data["Variable"] = X_with_const.columns
+        vif_data["Variable"] = X_with_const.columns.tolist()
         
         vif_values = []
-        for i in range(X_with_const.shape[1]):
+        for i, col in enumerate(X_with_const.columns):
             try:
                 vif_val = variance_inflation_factor(X_with_const.values, i)
-                # Handle infinite or extremely large VIF values
-                if np.isinf(vif_val) or vif_val > 1000:
-                    vif_val = 1000  # Cap at 1000 for display
+                
+                # Handle problematic VIF values
+                if np.isnan(vif_val) or np.isinf(vif_val):
+                    vif_val = 999.9  # Large value to indicate problem
+                elif vif_val > 1000:
+                    vif_val = 999.9  # Cap extremely large values
+                
                 vif_values.append(vif_val)
+                st.write(f"  ✓ {col}: {vif_val:.2f}")
+                
             except Exception as e:
-                st.warning(f"⚠️ Could not calculate VIF for variable {X_with_const.columns[i]}: {str(e)}")
+                st.warning(f"  ⚠️ Could not calculate VIF for {col}: {str(e)}")
                 vif_values.append(np.nan)
         
         vif_data["VIF"] = vif_values
         
-        # Sort by VIF value
-        vif_data = vif_data.sort_values('VIF', ascending=False)
+        # Remove rows with NaN VIF values for sorting
+        vif_data_clean = vif_data.dropna()
+        vif_data_clean = vif_data_clean.sort_values('VIF', ascending=False)
         
+        # Display results
+        st.success("✅ VIF calculation completed!")
         st.write("📊 **VIF Results:**")
-        st.dataframe(vif_data, use_container_width=True)
+        st.dataframe(vif_data_clean, use_container_width=True)
         
         # VIF interpretation
-        high_vif = vif_data[vif_data['VIF'] > 10]
-        moderate_vif = vif_data[(vif_data['VIF'] > 5) & (vif_data['VIF'] <= 10)]
-        low_vif = vif_data[vif_data['VIF'] <= 5]
+        valid_vif = vif_data_clean[vif_data_clean['Variable'] != 'const']
+        high_vif = valid_vif[valid_vif['VIF'] > 10]
+        moderate_vif = valid_vif[(valid_vif['VIF'] > 5) & (valid_vif['VIF'] <= 10)]
+        low_vif = valid_vif[valid_vif['VIF'] <= 5]
         
         col1, col2, col3 = st.columns(3)
         
@@ -397,20 +475,34 @@ def calculate_vif_analysis():
             st.warning("⚠️ **Recommendation:** Consider removing variables with VIF > 10 to reduce multicollinearity")
             st.write("**High VIF Variables:**")
             for _, row in high_vif.iterrows():
-                if row['Variable'] != 'const' and not pd.isna(row['VIF']):
-                    st.write(f"• {row['Variable']}: {row['VIF']:.2f}")
+                st.write(f"• {row['Variable']}: {row['VIF']:.2f}")
         else:
             st.success("✅ **Good:** No high multicollinearity detected among selected variables")
         
         # Store VIF results
-        st.session_state.vif_results = vif_data
+        st.session_state.vif_results = vif_data_clean
         
     except Exception as e:
-        st.error(f"❌ Error calculating VIF: {str(e)}")
-        st.write("**Debug Information:**")
-        st.write(f"- Selected factored features: {len(selected_factored)}")
-        st.write(f"- Selected raw features: {len(selected_raw)}")
-        st.write("Please ensure all selected variables exist in the respective datasets.")
+        st.error(f"❌ Unexpected error in VIF calculation: {str(e)}")
+        
+        # Debug information
+        st.write("**🔍 Debug Information:**")
+        try:
+            st.write(f"- Selected factored features: {len(st.session_state.get('selected_factored_features', []))}")
+            st.write(f"- Selected raw features: {len(st.session_state.get('selected_raw_features', []))}")
+            
+            factor_scores_df = st.session_state.get('factor_scores_df', pd.DataFrame())
+            if not factor_scores_df.empty:
+                st.write(f"- Factor scores shape: {factor_scores_df.shape}")
+                st.write(f"- Factor scores columns: {list(factor_scores_df.columns)}")
+            
+            final_model_df = st.session_state.get('final_model_df')
+            if final_model_df is not None and not final_model_df.empty:
+                st.write(f"- Final model df shape: {final_model_df.shape}")
+                st.write(f"- Sample columns: {list(final_model_df.columns)[:10]}")
+            
+        except Exception as debug_e:
+            st.write(f"Could not generate debug info: {str(debug_e)}")
 
 def train_and_evaluate_model():
     """Train logistic regression with combined variable set"""
