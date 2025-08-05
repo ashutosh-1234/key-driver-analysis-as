@@ -8,14 +8,22 @@ def render_feature_prep_page():
     """Render the feature-engineering and data-preparation page"""
 
     # ── Prerequisite check ────────────────────────────────────────────────
-    if st.session_state.selected_target_col is None:
+    if 'selected_target_col' not in st.session_state or st.session_state.selected_target_col is None:
         st.error("❌ No target variable selected. Please complete Step 4 first.")
+        return
+
+    # Check for required session state variables
+    required_vars = ['filtered_df', 'bin_df', 'selected_target_col']
+    missing_vars = [var for var in required_vars if var not in st.session_state or st.session_state[var] is None]
+    
+    if missing_vars:
+        st.error(f"❌ Missing required data: {', '.join(missing_vars)}. Please complete previous steps first.")
         return
 
     filtered_df = st.session_state.filtered_df
     bin_df = st.session_state.bin_df
     selected_target_col = st.session_state.selected_target_col
-    selected_target_name = st.session_state.selected_target_name
+    selected_target_name = st.session_state.get('selected_target_name', selected_target_col)  # Fallback to column name
 
     st.markdown(
         f"""
@@ -45,6 +53,8 @@ def render_feature_prep_page():
     # ── Trigger feature preparation ──────────────────────────────────────
     if st.button("🔄 Prepare Features for Analysis", type="primary"):
         prepare_features_for_analysis()
+        if 'step_completed' not in st.session_state:
+            st.session_state.step_completed = {}
         st.session_state.step_completed[4] = True
 
 
@@ -55,6 +65,7 @@ def prepare_features_for_analysis():
     filtered_df = st.session_state.filtered_df
     bin_df = st.session_state.bin_df
     selected_target_col = st.session_state.selected_target_col
+    selected_target_name = st.session_state.get('selected_target_name', selected_target_col)
 
     st.subheader("⚙️ Feature-Preparation Process")
     with st.spinner("Processing features..."):
@@ -103,22 +114,35 @@ def prepare_features_for_analysis():
     # ── Dual correlation table (Raw + Binary Target) ───────────────────
     st.subheader("🎯 Correlation Analysis - Raw vs Binary Target")
     
-    # Get raw target variable column name
-    raw_target_col = _get_raw_target_column()
-    
-    if raw_target_col:
-        dual_corr_df = _calculate_dual_correlations(final_df, raw_target_col, selected_target_col)
-        st.dataframe(dual_corr_df, use_container_width=True)
+    try:
+        # Get raw target variable column name
+        raw_target_col = _get_raw_target_column()
         
-        # Add explanation
-        st.info(f"""
-        📝 **Correlation Explanation:**
-        - **Raw Target Correlation**: Correlation with original {selected_target_name} values (1-7 scale)
-        - **Binary Target Correlation**: Correlation with binary {selected_target_name} (0/1 from Top-2-Box)
-        - **Sorted by**: Raw target correlation (descending absolute value)
-        """)
-    else:
-        st.error("❌ Could not find raw target variable for correlation analysis")
+        if raw_target_col:
+            dual_corr_df = _calculate_dual_correlations(final_df, raw_target_col, selected_target_col)
+            st.dataframe(dual_corr_df, use_container_width=True)
+            
+            # Add explanation with safe variable access
+            target_display_name = selected_target_name.split(' (')[0] if '(' in selected_target_name else selected_target_name
+            
+            st.info(f"""
+            📝 **Correlation Explanation:**
+            - **Raw Target Correlation**: Correlation with original {target_display_name} values (1-7 scale)
+            - **Binary Target Correlation**: Correlation with binary {target_display_name} (0/1 from Top-2-Box)
+            - **Sorted by**: Raw target correlation (descending absolute value)
+            """)
+        else:
+            st.warning("⚠️ Could not find raw target variable for correlation analysis. Showing binary target correlation only.")
+            
+            # Fallback: show only binary correlation
+            fallback_corr_df = _calculate_binary_only_correlation(final_df, selected_target_col)
+            st.dataframe(fallback_corr_df, use_container_width=True)
+            
+    except Exception as e:
+        st.error(f"❌ Error in correlation analysis: {str(e)}")
+        st.write("Debug info:")
+        st.write(f"- Selected target col: {selected_target_col}")
+        st.write(f"- Selected target name: {selected_target_name}")
 
     st.info("📌 Features prepared successfully! Click **Next ➡️** to proceed to feature selection.")
 
@@ -157,10 +181,16 @@ def _calculate_dual_correlations(final_df, raw_target_col, binary_target_col):
     for feat in feature_list:
         try:
             # Raw target correlation (from original filtered data)
-            raw_corr = filtered_df[feat].corr(filtered_df[raw_target_col])
+            if raw_target_col in filtered_df.columns and feat in filtered_df.columns:
+                raw_corr = filtered_df[feat].corr(filtered_df[raw_target_col])
+            else:
+                raw_corr = np.nan
             
             # Binary target correlation (from final processed data)
-            binary_corr = final_df[feat].corr(final_df[binary_target_col])
+            if feat in final_df.columns and binary_target_col in final_df.columns:
+                binary_corr = final_df[feat].corr(final_df[binary_target_col])
+            else:
+                binary_corr = np.nan
             
             corr_rows.append({
                 "Feature": feat,
@@ -168,7 +198,7 @@ def _calculate_dual_correlations(final_df, raw_target_col, binary_target_col):
                 "Binary Target Correlation": binary_corr,
                 "Abs Raw Correlation": abs(raw_corr) if not pd.isna(raw_corr) else 0
             })
-        except Exception:
+        except Exception as e:
             # Handle any correlation calculation errors
             corr_rows.append({
                 "Feature": feat,
@@ -192,8 +222,52 @@ def _calculate_dual_correlations(final_df, raw_target_col, binary_target_col):
     return corr_df
 
 
+def _calculate_binary_only_correlation(final_df, binary_target_col):
+    """Fallback: Calculate correlation with binary target only"""
+    
+    feature_list = st.session_state.feature_list
+    corr_rows = []
+    
+    for feat in feature_list:
+        try:
+            if feat in final_df.columns and binary_target_col in final_df.columns:
+                binary_corr = final_df[feat].corr(final_df[binary_target_col])
+            else:
+                binary_corr = np.nan
+            
+            corr_rows.append({
+                "Feature": feat,
+                "Binary Target Correlation": binary_corr,
+                "Abs Binary Correlation": abs(binary_corr) if not pd.isna(binary_corr) else 0
+            })
+        except Exception:
+            corr_rows.append({
+                "Feature": feat,
+                "Binary Target Correlation": np.nan,
+                "Abs Binary Correlation": 0
+            })
+    
+    # Create DataFrame and sort by absolute binary correlation (descending)
+    corr_df = (
+        pd.DataFrame(corr_rows)
+        .sort_values("Abs Binary Correlation", ascending=False)
+        .reset_index(drop=True)
+        .loc[:, ["Feature", "Binary Target Correlation"]]
+    )
+    
+    corr_df["Binary Target Correlation"] = corr_df["Binary Target Correlation"].round(4)
+    
+    return corr_df
+
+
 def _display_feature_categories():
     """Helper to show features by category"""
+    
+    # Check if feature_list exists in session state
+    if 'feature_list' not in st.session_state:
+        st.warning("Feature list not available. Please run feature preparation first.")
+        return
+        
     feature_list = st.session_state.feature_list
 
     rep_feats = [f for f in feature_list if "Rep Attributes" in f]
@@ -225,3 +299,4 @@ def _display_feature_categories():
 # ──────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     render_feature_prep_page()
+
