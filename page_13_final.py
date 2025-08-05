@@ -5,167 +5,153 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-
 # ---------- CONFIG ----------
-MIN_OTHER_BUCKET = 5.0        # % threshold below which drivers are grouped as "Others"
-TOP_N_LIST = [5, 10]          # for the waterfall scenarios
-
+MIN_OTHER_BUCKET = 5.0  # % threshold below which drivers are grouped as "Others"
+TOP_N_LIST = [5, 10]    # for the waterfall scenarios
 
 def show_page():
-    st.header("🎯 Step 13: Final Results Dashboard")
-
-    # Prerequisite checks ----------------------------------------------------
-    required_states = ["regression_model", "model_results"]
-    missing = [key for key in required_states if key not in st.session_state]
-    if missing:
-        st.error(f"⚠️ Missing previous steps: {', '.join(missing)}")
-        st.info("Please complete Step 12 (Logistic Regression) first.")
-        return
-
-    # ✅ CRITICAL: Define BOTH variables from session state
-    try:
-        regression_model = st.session_state.regression_model
-        model_results = st.session_state.model_results
-    except Exception as e:
-        st.error(f"❌ Error accessing session data: {str(e)}")
-        return
-
-    # Build impact dataframe
-    try:
-        coef_df = build_impact_df(model_results, regression_model)
-    except Exception as e:
-        st.error(f"❌ Error building impact data: {str(e)}")
-        return
-
-    if coef_df.empty:
-        st.warning("⚠️ No impact data available to display.")
-        return
-
-    # Display overview metrics
-    st.subheader("📊 Analysis Overview")
+    st.header("🎯 Step 13: Final Key Driver Summary")
     
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Variables", len(coef_df))
-    with col2:
-        positive_vars = len(coef_df[coef_df["Impact_%"] > 0])
-        st.metric("Positive Impact", positive_vars)
-    with col3:
-        total_impact = coef_df["Impact_%"].sum()
-        st.metric("Total Impact", f"{total_impact:.1f}%")
-    with col4:
-        if not coef_df.empty:
-            top_driver_impact = coef_df.iloc[0]["Impact_%"]
-            st.metric("Top Driver", f"{top_driver_impact:.1f}%")
-
-    # -------- Feature selector ---------------------------------------------
-    st.subheader("✅ Select Final Set of Drivers")
-
+    # More flexible prerequisite checks
+    required_data = check_prerequisites()
+    if not required_data:
+        return
+        
+    model, X_test, y_test, selected_features = required_data
+    
+    # Build impact dataframe
+    coef_df = build_impact_df(model, selected_features)
+    
+    # Feature selector
+    st.subheader("✅ Select the final set of drivers to include")
     all_vars = coef_df["Variable"].tolist()
+    
     if "final_vars" not in st.session_state:
-        # default: top variables with positive impact
-        positive_vars = coef_df[coef_df["Impact_%"] > 0]["Variable"].tolist()
-        st.session_state.final_vars = positive_vars[:10]  # top 10 by default
-
+        # Default: all variables with positive impact
+        st.session_state.final_vars = coef_df[coef_df["Impact_%"] > 0]["Variable"].tolist()
+    
     final_vars = st.multiselect(
-        label="Choose variables to include in final analysis:",
+        label="Choose variables",
         options=all_vars,
         default=st.session_state.final_vars,
         help="These will be reflected in the bar & waterfall charts."
     )
+    
     st.session_state.final_vars = final_vars
-
+    
     if len(final_vars) == 0:
-        st.warning("⚠️ Select at least one variable to proceed.")
+        st.warning("Select at least one variable to proceed.")
         return
-
-    st.success(f"✅ {len(final_vars)} variables selected for final analysis")
-
-    # -----------------------------------------------------------------------
+    
+    # Charts
     st.divider()
     st.subheader("📊 Impact Bar Chart")
+    bar_fig = make_impact_bar(coef_df, final_vars)
+    st.plotly_chart(bar_fig, use_container_width=True)
     
-    try:
-        bar_fig = make_impact_bar(coef_df, final_vars)
-        st.plotly_chart(bar_fig, use_container_width=True)
-    except Exception as e:
-        st.error(f"❌ Error creating impact bar chart: {str(e)}")
-
-    # -----------------------------------------------------------------------
-    st.subheader("🚀 Waterfall Analysis - Uplift Scenarios")
+    st.subheader("🚀 Waterfall – 'What-if' uplift scenarios")
+    wf_fig = make_waterfall_chart(coef_df, final_vars, y_test)
+    st.plotly_chart(wf_fig, use_container_width=True)
     
+    st.caption(
+        "Bar = % contribution when all selected drivers improve by 10 p.p.; "
+        "Waterfall = projected Top-5 and Top-10 uplift vs. current level."
+    )
+
+def check_prerequisites():
+    """Check for required data from Step 12 in various possible locations."""
+    
+    # Try multiple possible sources for the model and results
+    model = None
+    selected_features = None
+    X_test = None
+    y_test = None
+    
+    # Option 1: Direct from session state (new format)
+    if hasattr(st.session_state, 'last_trained_model'):
+        model = st.session_state.last_trained_model
+    elif hasattr(st.session_state, 'regression_model'):
+        model = st.session_state.regression_model
+    
+    # Option 2: From model_results dict
+    if hasattr(st.session_state, 'model_results') and st.session_state.model_results:
+        results = st.session_state.model_results
+        if 'regression_model' in results:
+            model = results['regression_model']
+        if 'selected_features' in results:
+            selected_features = results['selected_features']
+        if 'X_test' in results:
+            X_test = results['X_test']
+        if 'y_test' in results:
+            y_test = results['y_test']
+    
+    # Option 3: Try to reconstruct from available data
+    if model is None:
+        st.error("⚠️ Missing trained model from Step 12.")
+        st.info("Please complete Step 12 (Logistic Regression Analysis) first.")
+        return None
+    
+    # Get selected features if not available
+    if selected_features is None:
+        if hasattr(st.session_state, 'sel_factored') and hasattr(st.session_state, 'sel_raw'):
+            selected_features = st.session_state.sel_factored + st.session_state.sel_raw
+        else:
+            st.error("⚠️ Missing selected features information.")
+            st.info("Please complete Step 12 variable selection first.")
+            return None
+    
+    # Get test data if not available - reconstruct if needed
+    if y_test is None:
+        if hasattr(st.session_state, 'y_target'):
+            y_test = st.session_state.y_target
+        else:
+            st.error("⚠️ Missing target variable data.")
+            return None
+    
+    return model, X_test, y_test, selected_features
+
+def build_impact_df(model, selected_features: list) -> pd.DataFrame:
+    """Build impact dataframe from model coefficients."""
     try:
-        wf_fig = make_waterfall_chart(coef_df, final_vars, model_results)
-        st.plotly_chart(wf_fig, use_container_width=True)
-        
-        # Add explanation
-        with st.expander("📖 How to Interpret the Waterfall Chart"):
-            st.write("""
-            **Current Level**: The baseline performance of your target variable
-            
-            **Top 5 Metrics**: Shows projected improvement if you optimize the top 5 drivers by 10 percentage points each
-            
-            **Top 10 Metrics**: Shows projected improvement if you optimize the top 10 drivers by 10 percentage points each
-            
-            This helps you understand the potential business impact of focusing improvement efforts on your key drivers.
-            """)
-    except Exception as e:
-        st.error(f"❌ Error creating waterfall chart: {str(e)}")
-
-    # Summary insights
-    st.subheader("💡 Key Insights & Recommendations")
-    display_insights(coef_df, final_vars)
-
-
-# === Helper Functions ======================================================
-
-
-def build_impact_df(model_results: dict, regression_model) -> pd.DataFrame:
-    """
-    Combine coefficients + normalized impacts into one dataframe.
-    """
-    try:
-        # Get coefficients from model
-        selected_features = model_results.get("selected_features", [])
-        if not selected_features:
-            st.error("❌ No selected features found in model results")
+        # Get coefficients
+        if hasattr(model, 'coef_'):
+            betas = model.coef_[0]
+        else:
+            st.error("Invalid model object - no coefficients found.")
             return pd.DataFrame()
         
-        betas = regression_model.coef_[0]
-        
+        # Ensure we have the right number of features
         if len(selected_features) != len(betas):
-            st.error("❌ Mismatch between features and coefficients")
-            return pd.DataFrame()
+            st.warning(f"Feature count mismatch: {len(selected_features)} features vs {len(betas)} coefficients")
+            min_len = min(len(selected_features), len(betas))
+            selected_features = selected_features[:min_len]
+            betas = betas[:min_len]
         
-        # Create base dataframe
         base_df = pd.DataFrame({
             "Variable": selected_features, 
             "Beta": betas
         })
-
-        # Calculate normalized impact percentages
+        
+        # Calculate impact percentages
         base_df["Abs_Beta"] = base_df["Beta"].abs()
         total_abs_impact = base_df["Abs_Beta"].sum()
         
         if total_abs_impact == 0:
-            st.warning("⚠️ All coefficients are zero - no impact to display")
-            return pd.DataFrame()
+            base_df["Impact_%"] = 0
+        else:
+            base_df["Impact_%"] = (base_df["Abs_Beta"] / total_abs_impact) * 100
         
-        base_df["Impact_%"] = (base_df["Abs_Beta"] / total_abs_impact) * 100
-
         # Check for external normalized impacts
-        if "normalized_impacts" in st.session_state:
-            try:
-                ext_imp = st.session_state.normalized_impacts
-                ext_df = pd.DataFrame(list(ext_imp.items()), columns=["Variable", "External_Impact_%"])
-                base_df = base_df.merge(ext_df, on="Variable", how="left")
-                # Use external impacts if available, otherwise use calculated
-                base_df["Impact_%"] = base_df["External_Impact_%"].fillna(base_df["Impact_%"])
-                base_df.drop(columns=["External_Impact_%"], inplace=True)
-            except Exception:
-                pass  # Continue with calculated impacts
-
-        # Keep sign information for waterfall
+        if hasattr(st.session_state, 'normalized_impacts') and st.session_state.normalized_impacts:
+            ext_imp = st.session_state.normalized_impacts
+            ext_df = pd.DataFrame(list(ext_imp.items()), columns=["Variable", "Impact_%"])
+            base_df = (
+                base_df.drop(columns=["Impact_%"])
+                .merge(ext_df, on="Variable", how="left")
+                .fillna(0)
+            )
+        
+        # Signed impact for waterfall
         base_df["Signed_Impact"] = np.where(
             base_df["Beta"] > 0, 
             base_df["Impact_%"], 
@@ -173,210 +159,143 @@ def build_impact_df(model_results: dict, regression_model) -> pd.DataFrame:
         )
         
         return base_df.sort_values("Impact_%", ascending=False).reset_index(drop=True)
-    
+        
     except Exception as e:
-        st.error(f"❌ Error in build_impact_df: {str(e)}")
+        st.error(f"Error building impact dataframe: {str(e)}")
         return pd.DataFrame()
 
-
 def make_impact_bar(impact_df: pd.DataFrame, picked_vars: list):
-    """
-    Create horizontal bar chart with main drivers + Others bucket.
-    """
-    if impact_df.empty or not picked_vars:
-        return go.Figure()
-    
-    # Filter to selected variables and positive impacts only
-    df = impact_df[impact_df["Variable"].isin(picked_vars)].copy()
-    df = df[df["Impact_%"] > 0]
-    
-    if df.empty:
-        st.warning("⚠️ No positive impact variables to display")
-        return go.Figure()
-    
-    df = df.sort_values("Impact_%", ascending=False)
-
-    # Split into main drivers and others
-    main = df[df["Impact_%"] >= MIN_OTHER_BUCKET]
-    others = df[df["Impact_%"] < MIN_OTHER_BUCKET]
-    
-    plot_df = main.copy()
-    
-    # Add Others bucket if there are small drivers
-    if not others.empty:
-        others_row = pd.DataFrame({
-            "Variable": [f"Others ({len(others)} drivers)"],
-            "Impact_%": [others["Impact_%"].sum()],
-            "Beta": [0],  # placeholder
-            "Abs_Beta": [0],  # placeholder
-            "Signed_Impact": [others["Impact_%"].sum()]
-        })
-        plot_df = pd.concat([plot_df, others_row], ignore_index=True)
-
-    # Create colors
-    colors = ["#2E86AB" if not var.startswith("Others") else "#A23B72" 
-              for var in plot_df["Variable"]]
-
-    # Create the bar chart
-    fig = px.bar(
-        plot_df,
-        x="Impact_%", 
-        y="Variable",
-        orientation="h",
-        color=colors,
-        color_discrete_map="identity",
-        height=max(400, 50 * len(plot_df))
-    )
-    
-    # Add percentage labels
-    fig.update_traces(
-        texttemplate="%{x:.1f}%", 
-        textposition="outside",
-        showlegend=False
-    )
-    
-    fig.update_layout(
-        title="Driver Impact Analysis - Normalized Importance (%)",
-        xaxis_title="Impact Contribution (%)",
-        yaxis_title="",
-        yaxis={"categoryorder": "total ascending"},
-        showlegend=False,
-        margin=dict(l=200)  # More space for long variable names
-    )
-    
-    return fig
-
-
-def make_waterfall_chart(impact_df: pd.DataFrame, picked_vars: list, model_results: dict):
-    """
-    Create waterfall chart showing current level vs optimized scenarios.
-    """
-    if impact_df.empty or not picked_vars:
-        return go.Figure()
-    
+    """Horizontal bar chart: top drivers ≥ MIN_OTHER_BUCKET plus 'Others'."""
     try:
-        # Get baseline from test data
-        y_test = model_results.get("y_test")
-        if y_test is None:
-            st.error("❌ No test data available for baseline calculation")
-            return go.Figure()
-        
-        current_level = y_test.mean()
-        
-        # Filter and sort selected variables
         df = impact_df[impact_df["Variable"].isin(picked_vars)].copy()
-        df = df[df["Impact_%"] > 0]  # Only positive impacts
+        df = df[df["Impact_%"] > 0]  # only positive
         df = df.sort_values("Impact_%", ascending=False)
         
         if df.empty:
-            st.warning("⚠️ No positive impact variables for waterfall")
+            st.warning("No positive impact variables to display.")
             return go.Figure()
         
-        # Calculate uplift scenarios
-        # Assumption: 10% improvement in top drivers translates to impact proportional to their coefficients
-        impacts = []
-        for n in TOP_N_LIST:
-            top_n = df.head(min(n, len(df)))
-            # Simple approach: sum of top N impacts as proportion
-            uplift = (top_n["Impact_%"].sum() / 100) * 0.1  # 10% of normalized impact
-            impacts.append(uplift)
+        main = df[df["Impact_%"] >= MIN_OTHER_BUCKET]
+        others = df[df["Impact_%"] < MIN_OTHER_BUCKET]
         
-        # Calculate projected levels
-        levels = [
-            current_level,
-            current_level + impacts[0],
-            current_level + impacts[1] if len(impacts) > 1 else current_level + impacts[0]
-        ]
+        if not others.empty:
+            others_row = pd.DataFrame({
+                "Variable": [f"Others ({len(others)})"],
+                "Impact_%": [others["Impact_%"].sum()]
+            })
+            plot_df = pd.concat([main, others_row], ignore_index=True)
+        else:
+            plot_df = main.copy()
         
-        labels = [
-            "Current Level",
-            f"Optimizing Top {TOP_N_LIST[0]} Drivers",
-            f"Optimizing Top {TOP_N_LIST[1]} Drivers" if len(TOP_N_LIST) > 1 else f"Optimizing Top {TOP_N_LIST[0]} Drivers"
-        ]
+        # Create color mapping
+        colors = []
+        for var in plot_df["Variable"]:
+            if var.startswith("Others"):
+                colors.append("#A23B72")  # Others color
+            else:
+                colors.append("#2E86AB")  # Driver color
         
-        # Create waterfall chart
-        fig = go.Figure()
+        fig = px.bar(
+            plot_df,
+            x="Impact_%", y="Variable",
+            orientation="h",
+            text="Impact_%",
+            height=max(400, 40 * len(plot_df)),
+            title="Normalized Impact of Selected Drivers"
+        )
         
-        colors = ["#3E4B8B", "#28A745", "#17A2B8"]
-        
-        for i, (label, level) in enumerate(zip(labels, levels)):
-            fig.add_trace(go.Bar(
-                x=[label],
-                y=[level * 100],  # Convert to percentage
-                marker_color=colors[i % len(colors)],
-                text=[f"{level*100:.1f}%"],
-                textposition="outside",
-                width=0.5,
-                showlegend=False
-            ))
-        
-        # Add connecting arrows
-        for i in range(len(levels) - 1):
-            fig.add_annotation(
-                x=i + 0.4, y=levels[i] * 100,
-                ax=i + 0.6, ay=levels[i+1] * 100,
-                arrowhead=2, arrowsize=1.5, arrowwidth=2,
-                arrowcolor="gray",
-                showarrow=True
-            )
+        # Update colors
+        fig.update_traces(
+            marker_color=colors,
+            texttemplate="%{text:.1f}%", 
+            textposition="outside"
+        )
         
         fig.update_layout(
-            title="Impact Waterfall: Current vs. Optimized Performance",
-            yaxis_title="Target Variable Level (%)",
-            xaxis_title="Scenario",
-            height=500,
-            yaxis=dict(range=[0, max(levels) * 100 * 1.2])
+            xaxis_title="Impact (%)",
+            yaxis_title="",
+            showlegend=False
         )
         
         return fig
-    
+        
     except Exception as e:
-        st.error(f"❌ Error creating waterfall chart: {str(e)}")
+        st.error(f"Error creating bar chart: {str(e)}")
         return go.Figure()
 
-
-def display_insights(impact_df: pd.DataFrame, final_vars: list):
-    """Display key insights and recommendations."""
-    
-    if impact_df.empty or not final_vars:
-        st.info("No insights available - please select variables first.")
-        return
-    
-    # Filter to selected variables
-    selected_df = impact_df[impact_df["Variable"].isin(final_vars)]
-    positive_df = selected_df[selected_df["Impact_%"] > 0].sort_values("Impact_%", ascending=False)
-    
-    if positive_df.empty:
-        st.info("No positive impact drivers selected.")
-        return
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write("**🏆 Top 3 Key Drivers:**")
-        for i, (_, row) in enumerate(positive_df.head(3).iterrows(), 1):
-            st.write(f"{i}. **{row['Variable']}**: {row['Impact_%']:.1f}% impact")
-    
-    with col2:
-        st.write("**📈 Optimization Potential:**")
-        top_5_impact = positive_df.head(5)["Impact_%"].sum()
-        st.write(f"• Top 5 drivers represent {top_5_impact:.1f}% of total impact")
+def make_waterfall_chart(impact_df: pd.DataFrame, picked_vars: list, y_target):
+    """Build a 3-column waterfall: current level vs +Top5 vs +Top10."""
+    try:
+        # Calculate current level
+        if hasattr(y_target, 'mean'):
+            current = y_target.mean()
+        else:
+            current = np.mean(y_target)
         
-        if len(positive_df) > 5:
-            remaining_impact = positive_df.iloc[5:]["Impact_%"].sum()
-            st.write(f"• Remaining drivers: {remaining_impact:.1f}% of total impact")
-    
-    # Recommendations
-    st.write("**🎯 Strategic Recommendations:**")
-    
-    if top_5_impact > 60:
-        st.success("✅ **Focus Strategy**: The top 5 drivers account for most impact. Concentrate efforts here for maximum ROI.")
-    elif top_5_impact > 40:
-        st.info("📊 **Balanced Strategy**: Impact is moderately concentrated. Focus on top drivers while monitoring others.")
-    else:
-        st.warning("⚠️ **Broad Strategy**: Impact is distributed across many drivers. Consider a comprehensive improvement approach.")
+        df = impact_df[impact_df["Variable"].isin(picked_vars)].copy()
+        df = df.sort_values("Impact_%", ascending=False)
+        
+        if df.empty:
+            st.warning("No variables available for waterfall chart.")
+            return go.Figure()
+        
+        # Calculate impacts for top N
+        impacts = []
+        for n in TOP_N_LIST:
+            top_n = df.head(n)
+            uplift = top_n["Impact_%"].sum() / 100  # Convert % to proportion
+            # Scale the uplift (assuming 10% improvement in drivers leads to this impact)
+            scaled_uplift = uplift * 0.1  # 10% improvement factor
+            impacts.append(scaled_uplift)
+        
+        levels = [current, current + impacts[0], current + impacts[1]]
+        labels = [
+            "Current Level",
+            f"10% ↑ in Top {TOP_N_LIST[0]}",
+            f"10% ↑ in Top {TOP_N_LIST[1]}"
+        ]
+        
+        fig = go.Figure()
+        colors = ["#3E4B8B", "#28A745", "#17A2B8"]
+        
+        for i, (lab, val) in enumerate(zip(labels, levels)):
+            fig.add_trace(go.Bar(
+                x=[lab], 
+                y=[val * 100],  # Show as percentage
+                marker_color=colors[i],
+                text=[f"{val*100:.1f}%"],
+                textposition="outside",
+                width=0.5
+            ))
+        
+        # Add connecting lines
+        for i in range(len(levels) - 1):
+            fig.add_annotation(
+                x=i + 0.5, y=levels[i] * 100,
+                ax=i, ay=levels[i] * 100,
+                xref="x", yref="y",
+                axref="x", ayref="y",
+                showarrow=True, arrowhead=2, arrowsize=1,
+                arrowcolor="gray"
+            )
+        
+        fig.update_layout(
+            title="Projected Lift with Driver Optimization",
+            yaxis_title="Top-2-Box Level (%)",
+            xaxis_title="Scenario",
+            showlegend=False,
+            bargap=0.6,
+            height=500
+        )
+        
+        max_val = max([v*100 for v in levels])
+        fig.update_yaxes(range=[0, max_val * 1.15])
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating waterfall chart: {str(e)}")
+        return go.Figure()
 
-
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     show_page()
