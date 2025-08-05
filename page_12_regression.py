@@ -1,14 +1,12 @@
-# ─────────────────── page_12_regression.py ───────────────────
 import streamlit as st
 import pandas as pd
 import numpy as np
 
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    confusion_matrix, classification_report, roc_auc_score,
-    roc_curve, accuracy_score, precision_score, recall_score, f1_score
-)
+from sklearn.metrics import (confusion_matrix, classification_report,
+                             roc_auc_score, roc_curve, accuracy_score,
+                             precision_score, recall_score, f1_score)
 
 import plotly.express as px
 import plotly.graph_objects as go
@@ -16,261 +14,246 @@ import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 
-# ──────────────────────────────────────────────────────────────
-def show_page() -> None:
-    st.header("📈 Step 12 · Logistic Regression Analysis")
+# ────────────────────────────────────────────────────────────────────────────────
+#  Main Page
+# ────────────────────────────────────────────────────────────────────────────────
+def show_page():
+    st.header("📈 Step 12: Logistic Regression Analysis")
 
-    # Prerequisite checks
-    if "factor_scores_df" not in st.session_state or st.session_state.factor_scores_df is None:
+    # --- Prerequisite checks ----------------------------------------------------
+    if 'factor_scores_df' not in st.session_state or st.session_state.factor_scores_df is None:
         st.error("⚠️ No factor scores available. Please complete factor analysis first.")
         return
-    if "selected_target_col" not in st.session_state:
+
+    if 'selected_target_col' not in st.session_state:
         st.error("⚠️ No target variable selected. Please complete previous steps.")
         return
 
-    # 1 Prepare data
+    # --- Data preparation & basic summary --------------------------------------
     prepare_regression_data()
-
-    # 2 Show preparation results
     display_data_summary()
 
-    # 3 VIF
+    # --- VIF analysis ----------------------------------------------------------
     st.subheader("🔍 Multicollinearity Check (VIF Analysis)")
     if st.button("Calculate VIF", type="secondary"):
         calculate_vif_analysis()
 
-    # 4 Variable selection UI
+    # --- Variable selection interface -----------------------------------------
     st.subheader("🎛️ Variable Selection")
     variable_selection_interface()
 
-    # 5 Model
+    # --- NEW: Correlation matrix ----------------------------------------------
+    st.subheader("📈 Correlation Matrix (Selected Variables)")
+    if st.button("Show Correlation Matrix"):
+        display_correlation_matrix()
+
+    # --- Model training & evaluation ------------------------------------------
     st.subheader("🚀 Model Training & Evaluation")
     if st.button("Train Logistic Regression Model", type="primary"):
         train_and_evaluate_model()
 
 
-# ──────────────────────────────────────────────────────────────
-def prepare_regression_data() -> None:
-    """Collect everything needed for modelling + work out raw features."""
-    # Data already built in earlier steps
-    factor_scores_df = st.session_state.factor_scores_df          # factor scores
-    model_df          = st.session_state.model_df                 # ALL 37 numeric features
-    feature_list      = st.session_state.feature_list             # list of 37 names
-    selected_features = st.session_state.selected_features        # 22 chosen for FA
-    target_col        = st.session_state.selected_target_col
+# ────────────────────────────────────────────────────────────────────────────────
+#  Helper Functions
+# ────────────────────────────────────────────────────────────────────────────────
+def prepare_regression_data():
+    """Combine factor scores with target variable and store in session_state."""
+    X_factors = st.session_state.factor_scores_df.reset_index(drop=True)
+    y_target = st.session_state.final_model_df[st.session_state.selected_target_col].reset_index(drop=True)
 
-    # Split target & predictors
-    X_factors = factor_scores_df.reset_index(drop=True)           # k factor columns
-    y_target  = model_df[target_col].reset_index(drop=True)
-
-    # ---- NEW: find RAW FEATURES ----
-    raw_features = [f for f in feature_list if f not in selected_features]
-
-    # Store for later pages
-    st.session_state.X_factors      = X_factors
-    st.session_state.y_target       = y_target
-    st.session_state.factor_names   = list(X_factors.columns)     # factored variable names
-    st.session_state.raw_features   = raw_features                # 15 names
-    st.session_state.model_df_full  = model_df                    # keep full df
-
-    # Debug line so you can verify counts
-    st.info(
-        f"Step 5 features: {len(feature_list)} · "
-        f"Selected for FA: {len(selected_features)} · "
-        f"Raw features now available: {len(raw_features)}"
-    )
+    st.session_state.X_factors = X_factors
+    st.session_state.y_target = y_target
+    st.session_state.feature_names = list(X_factors.columns)
 
 
-# ──────────────────────────────────────────────────────────────
-def display_data_summary() -> None:
-    st.subheader("📊 Dataset Summary")
+def display_data_summary():
+    """Basic dataset KPIs & target distribution."""
+    X_factors = st.session_state.X_factors
+    y_target = st.session_state.y_target
+    feature_names = st.session_state.feature_names
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Factored Vars", len(st.session_state.factor_names))
-    col2.metric("Raw Vars",     len(st.session_state.raw_features))
-    col3.metric("Sample Size",  len(st.session_state.X_factors))
-    col4.metric("Target Var",   st.session_state.selected_target_name)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Independent Variables", len(feature_names))
+    with col2:
+        st.metric("Sample Size", len(X_factors))
+    with col3:
+        st.metric("Target Variable", st.session_state.selected_target_name)
+
+    # Target pie-chart
+    target_counts = y_target.value_counts()
+    fig = px.pie(values=target_counts.values,
+                 names=target_counts.index,
+                 title="Target Variable Distribution",
+                 color_discrete_sequence=['lightcoral', 'lightblue'])
+    st.plotly_chart(fig, use_container_width=True)
 
 
-# ──────────────────────────────────────────────────────────────
-def variable_selection_interface() -> None:
-    """Two-tab selector: Factored & Raw."""
-    factor_names = st.session_state.factor_names
-    raw_features = st.session_state.raw_features
+def calculate_vif_analysis():
+    """Variance-Inflation-Factor table and recommendations."""
+    X_with_const = sm.add_constant(st.session_state.X_factors)
+    vif_data = pd.DataFrame({
+        "Factor": X_with_const.columns,
+        "VIF": [variance_inflation_factor(X_with_const.values, i)
+                for i in range(X_with_const.shape[1])]
+    }).sort_values('VIF', ascending=False)
 
-    # initialise session selections
-    if "sel_factored" not in st.session_state:
-        st.session_state.sel_factored = factor_names.copy()
-    if "sel_raw" not in st.session_state:
-        st.session_state.sel_raw = []
+    st.write("📊 **VIF Results:**")
+    st.dataframe(vif_data, use_container_width=True)
 
-    tab_f, tab_r = st.tabs(["🔬 Factored Variables", "📊 Raw Variables"])
+    # Store for later use
+    st.session_state.vif_results = vif_data
 
-    # ---- Factored tab ----
-    with tab_f:
-        col1, col2 = st.columns(2)
-        if col1.button("Select All Factored"):
-            st.session_state.sel_factored = factor_names.copy()
+
+def variable_selection_interface():
+    """Checkbox UI for choosing which factors go into the model."""
+    feature_names = st.session_state.feature_names
+
+    # Initialise selection state
+    if 'selected_regression_features' not in st.session_state:
+        st.session_state.selected_regression_features = feature_names.copy()
+
+    # Bulk selection buttons
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("Select All"):
+            st.session_state.selected_regression_features = feature_names.copy()
             st.rerun()
-        if col2.button("Deselect All Factored"):
-            st.session_state.sel_factored = []
+    with col2:
+        if st.button("Deselect All"):
+            st.session_state.selected_regression_features = []
             st.rerun()
-
-        for v in factor_names:
-            checked = st.checkbox(v, v in st.session_state.sel_factored, key=f"f_{v}")
-            if checked and v not in st.session_state.sel_factored:
-                st.session_state.sel_factored.append(v)
-            if not checked and v in st.session_state.sel_factored:
-                st.session_state.sel_factored.remove(v)
-
-    # ---- Raw tab ----
-    with tab_r:
-        if not raw_features:
-            st.info("All original features were selected for factor analysis.")
-        else:
-            col1, col2 = st.columns(2)
-            if col1.button("Select All Raw"):
-                st.session_state.sel_raw = raw_features.copy()
-                st.rerun()
-            if col2.button("Deselect All Raw"):
-                st.session_state.sel_raw = []
+    with col3:
+        if 'vif_results' in st.session_state:
+            if st.button("Remove High VIF (>10)"):
+                high_vif_vars = st.session_state.vif_results.query("VIF > 10 and Factor != 'const'")['Factor']
+                st.session_state.selected_regression_features = [f for f in feature_names if f not in high_vif_vars]
                 st.rerun()
 
-            for v in raw_features:
-                checked = st.checkbox(v, v in st.session_state.sel_raw, key=f"r_{v}")
-                if checked and v not in st.session_state.sel_raw:
-                    st.session_state.sel_raw.append(v)
-                if not checked and v in st.session_state.sel_raw:
-                    st.session_state.sel_raw.remove(v)
+    # Individual check-boxes
+    selected_features = []
+    for var in feature_names:
+        checked = st.checkbox(var,
+                              value=var in st.session_state.selected_regression_features,
+                              key=f"chk_{var}")
+        if checked:
+            selected_features.append(var)
 
-    # quick summary
-    st.write(
-        f"**Selected:** "
-        f"{len(st.session_state.sel_factored)} factored + "
-        f"{len(st.session_state.sel_raw)} raw = "
-        f"{len(st.session_state.sel_factored)+len(st.session_state.sel_raw)}"
+    st.session_state.selected_regression_features = selected_features
+    st.info(f"**Selected Variables:** {len(selected_features)} / {len(feature_names)}")
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+#  NEW: Correlation Matrix
+# ────────────────────────────────────────────────────────────────────────────────
+def display_correlation_matrix():
+    """Show correlation heat-map & table for selected variables."""
+    selected_features = st.session_state.selected_regression_features
+    if len(selected_features) < 2:
+        st.warning("Select at least two variables to compute correlations.")
+        return
+
+    corr_matrix = st.session_state.X_factors[selected_features].corr()
+
+    fig = px.imshow(
+        corr_matrix,
+        text_auto=True,
+        color_continuous_scale='RdBu_r',
+        zmin=-1, zmax=1,
+        title="Correlation Matrix"
     )
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("Show correlation table"):
+        st.dataframe(corr_matrix.round(3), use_container_width=True)
 
 
-# ──────────────────────────────────────────────────────────────
-def calculate_vif_analysis() -> None:
-    """VIF on the currently selected variables (factored + raw)."""
-    if not st.session_state.sel_factored and not st.session_state.sel_raw:
-        st.error("Select at least one variable first.")
+# ────────────────────────────────────────────────────────────────────────────────
+#  Modelling
+# ────────────────────────────────────────────────────────────────────────────────
+def train_and_evaluate_model():
+    """Fit logistic regression and present performance metrics."""
+    selected_features = st.session_state.selected_regression_features
+    if len(selected_features) == 0:
+        st.error("⚠️ Please select at least one variable for modeling.")
         return
 
-    # build combined X
-    X = pd.DataFrame()
-    if st.session_state.sel_factored:
-        X = pd.concat([X, st.session_state.X_factors[st.session_state.sel_factored]], axis=1)
-    if st.session_state.sel_raw:
-        raw_df = st.session_state.model_df_full[st.session_state.sel_raw].fillna(
-            st.session_state.model_df_full[st.session_state.sel_raw].median()
-        )
-        X = pd.concat([X, raw_df], axis=1)
-
-    X_const = sm.add_constant(X)
-    vif = pd.DataFrame(
-        {
-            "Variable": X_const.columns,
-            "VIF": [variance_inflation_factor(X_const.values, i)
-                    for i in range(X_const.shape[1])]
-        }
-    ).sort_values("VIF", ascending=False)
-
-    st.dataframe(vif, use_container_width=True)
-    st.session_state.vif_results = vif
-
-
-# ──────────────────────────────────────────────────────────────
-def train_and_evaluate_model() -> None:
-    """Train logistic regression using the selected variables."""
-    sel_f = st.session_state.sel_factored
-    sel_r = st.session_state.sel_raw
-    if not sel_f and not sel_r:
-        st.error("Select at least one variable.")
-        return
-
-    # build X
-    X = pd.DataFrame()
-    if sel_f:
-        X = pd.concat([X, st.session_state.X_factors[sel_f]], axis=1)
-    if sel_r:
-        raw_df = st.session_state.model_df_full[sel_r].fillna(
-            st.session_state.model_df_full[sel_r].median()
-        )
-        X = pd.concat([X, raw_df], axis=1)
-
+    X = st.session_state.X_factors[selected_features]
     y = st.session_state.y_target
+
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.3, random_state=42, stratify=y
     )
 
-    with st.spinner("Training model…"):
-        model = LogisticRegression(max_iter=1_000, random_state=42)
+    with st.spinner("Training logistic regression model..."):
+        model = LogisticRegression(random_state=42, max_iter=1_000)
         model.fit(X_train, y_train)
 
-    # predictions
-    y_pred  = model.predict(X_test)
-    y_prob  = model.predict_proba(X_test)[:, 1]
+    # Predictions & probabilities
+    y_pred = model.predict(X_test)
+    y_proba = model.predict_proba(X_test)[:, 1]
 
-    # metrics
-    acc  = accuracy_score(y_test, y_pred)
-    prec = precision_score(y_test, y_pred)
-    rec  = recall_score(y_test, y_pred)
-    f1   = f1_score(y_test, y_pred)
-    auc  = roc_auc_score(y_test, y_prob)
+    # Store results
+    st.session_state.regression_model = model
 
-    # summary
-    st.subheader("📊 Performance Metrics")
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Accuracy",  f"{acc:.3f}")
-    c2.metric("Precision", f"{prec:.3f}")
-    c3.metric("Recall",    f"{rec:.3f}")
-    c4.metric("F1-Score",  f"{f1:.3f}")
-    c5.metric("AUC-ROC",   f"{auc:.3f}")
+    # ── Key driver (coefficient) plot ─────────────────────────────────────────
+    coeffs = pd.DataFrame({
+        'Factor': selected_features,
+        'Coefficient': model.coef_[0],
+        'Abs': np.abs(model.coef_[0])
+    }).sort_values('Abs', ascending=False)
 
-    # coefficients
-    coef_df = pd.DataFrame({
-        "Variable": X.columns,
-        "Coefficient": model.coef_[0],
-        "AbsCoef": np.abs(model.coef_[0]),
-        "Type": ["Factored" if v in sel_f else "Raw" for v in X.columns]
-    }).sort_values("AbsCoef", ascending=False)
-
-    fig = px.bar(
-        coef_df, y="Variable", x="Coefficient",
-        orientation="h", color="Type",
-        color_discrete_map={"Factored": "#2E86AB", "Raw": "#F24236"},
-        title="Variable Importance (Logistic Regression Coefficients)"
+    fig_coeffs = px.bar(
+        coeffs,
+        y='Factor', x='Coefficient',
+        orientation='h',
+        title='Factor Importance (Logistic Regression Coefficients)',
+        color='Coefficient',
+        color_continuous_scale='RdBu_r',
+        color_continuous_midpoint=0
     )
-    fig.update_layout(height=max(400, len(coef_df) * 28))
-    st.plotly_chart(fig, use_container_width=True)
+    fig_coeffs.update_layout(height=max(400, len(selected_features)*30))
+    st.plotly_chart(fig_coeffs, use_container_width=True)
 
-    # confusion matrix + ROC
+    # ── Metrics ───────────────────────────────────────────────────────────────
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, zero_division=0)
+    recall = recall_score(y_test, y_pred, zero_division=0)
+    f1 = f1_score(y_test, y_pred, zero_division=0)
+    auc = roc_auc_score(y_test, y_proba)
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Accuracy", f"{accuracy:.3f}")
+    col2.metric("Precision", f"{precision:.3f}")
+    col3.metric("Recall", f"{recall:.3f}")
+    col4.metric("F1-Score", f"{f1:.3f}")
+    col5.metric("AUC-ROC", f"{auc:.3f}")
+
+    # ── Confusion Matrix & ROC ───────────────────────────────────────────────
     cm = confusion_matrix(y_test, y_pred)
-    fig_cm = px.imshow(cm, text_auto=True, title="Confusion Matrix",
-                       labels=dict(x="Predicted", y="Actual"),
-                       color_continuous_scale="Blues")
-    st.plotly_chart(fig_cm, use_container_width=True)
-
-    fpr, tpr, _ = roc_curve(y_test, y_prob)
+    fig_cm = px.imshow(cm, text_auto=True, color_continuous_scale='Blues',
+                       title="Confusion Matrix",
+                       labels=dict(x="Predicted", y="Actual"))
+    fpr, tpr, _ = roc_curve(y_test, y_proba)
     fig_roc = go.Figure()
-    fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode="lines",
-                                 name=f"ROC curve (AUC = {auc:.3f})"))
-    fig_roc.add_trace(go.Scatter(x=[0,1], y=[0,1], mode="lines",
-                                 line=dict(dash="dash"), name="Random"))
+    fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines',
+                                 name=f"ROC Curve (AUC = {auc:.3f})"))
+    fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines',
+                                 name='Random', line=dict(dash='dash')))
     fig_roc.update_layout(title="ROC Curve",
                           xaxis_title="False Positive Rate",
                           yaxis_title="True Positive Rate")
-    st.plotly_chart(fig_roc, use_container_width=True)
 
-    # classification report
-    st.subheader("📋 Classification Report")
-    rep = pd.DataFrame(classification_report(y_test, y_pred, output_dict=True)).T
-    st.dataframe(rep.round(3), use_container_width=True)
+    col1, col2 = st.columns(2)
+    col1.plotly_chart(fig_cm, use_container_width=True)
+    col2.plotly_chart(fig_roc, use_container_width=True)
+
+    # ── Classification report table ──────────────────────────────────────────
+    report_df = pd.DataFrame(classification_report(y_test, y_pred, output_dict=True)).T
+    st.subheader("📋 Detailed Classification Report")
+    st.dataframe(report_df.round(3), use_container_width=True)
 
 
-# ──────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     show_page()
