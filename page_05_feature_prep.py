@@ -12,9 +12,9 @@ def render_feature_prep_page():
         st.error("❌ No target variable selected. Please complete Step 4 first.")
         return
 
-    filtered_df          = st.session_state.filtered_df
-    bin_df               = st.session_state.bin_df
-    selected_target_col  = st.session_state.selected_target_col
+    filtered_df = st.session_state.filtered_df
+    bin_df = st.session_state.bin_df
+    selected_target_col = st.session_state.selected_target_col
     selected_target_name = st.session_state.selected_target_name
 
     st.markdown(
@@ -29,8 +29,8 @@ def render_feature_prep_page():
     col1, col2, col3 = st.columns(3)
 
     if selected_target_col in bin_df.columns:
-        vc          = bin_df[selected_target_col].value_counts().sort_index()
-        total       = bin_df[selected_target_col].count()
+        vc = bin_df[selected_target_col].value_counts().sort_index()
+        total = bin_df[selected_target_col].count()
         positive_pct = (vc.get(1, 0) / total * 100) if total else 0
 
         with col1:
@@ -52,8 +52,8 @@ def render_feature_prep_page():
 def prepare_features_for_analysis():
     """Prepare features for key-driver analysis"""
 
-    filtered_df         = st.session_state.filtered_df
-    bin_df              = st.session_state.bin_df
+    filtered_df = st.session_state.filtered_df
+    bin_df = st.session_state.bin_df
     selected_target_col = st.session_state.selected_target_col
 
     st.subheader("⚙️ Feature-Preparation Process")
@@ -75,15 +75,15 @@ def prepare_features_for_analysis():
         ]
 
         # 3. Keep only numeric features & impute missing with median
-        num_feats          = analysis_df[feature_cols].select_dtypes(include=[np.number])
-        num_feats_filled   = num_feats.fillna(num_feats.median())
+        num_feats = analysis_df[feature_cols].select_dtypes(include=[np.number])
+        num_feats_filled = num_feats.fillna(num_feats.median())
 
         # 4. Assemble final modelling dataframe
         final_df = num_feats_filled.copy()
         final_df[selected_target_col] = analysis_df[selected_target_col]
 
         # 5. Store in session state
-        st.session_state.model_df     = final_df
+        st.session_state.model_df = final_df
         st.session_state.feature_list = list(num_feats_filled.columns)
 
     st.success("✅ Feature preparation completed successfully!")
@@ -97,45 +97,109 @@ def prepare_features_for_analysis():
         st.metric("Missing Values", final_df.isnull().sum().sum())
         st.metric("Target Variable", selected_target_col)
 
-    # ── Feature category listing (unchanged) ────────────────────────────
+    # ── Feature category listing ────────────────────────────────────────
     _display_feature_categories()
 
-    # ── Full correlation table (ALL features) ───────────────────────────
-    st.subheader("🎯 Correlation with Target – All Features")
-
-    corr_rows = []
-    for feat in st.session_state.feature_list:
-        try:
-            c = final_df[feat].corr(final_df[selected_target_col])
-            corr_rows.append({
-                "Feature": feat,
-                "Correlation": c,
-                "Abs_Correlation": abs(c)
-            })
-        except Exception:
-            pass
-
-    if corr_rows:
-        corr_df = (
-            pd.DataFrame(corr_rows)
-            .sort_values("Abs_Correlation", ascending=False)
-            .reset_index(drop=True)
-            .loc[:, ["Feature", "Correlation"]]
-        )
-        st.dataframe(corr_df, use_container_width=True)
+    # ── Dual correlation table (Raw + Binary Target) ───────────────────
+    st.subheader("🎯 Correlation Analysis - Raw vs Binary Target")
+    
+    # Get raw target variable column name
+    raw_target_col = _get_raw_target_column()
+    
+    if raw_target_col:
+        dual_corr_df = _calculate_dual_correlations(final_df, raw_target_col, selected_target_col)
+        st.dataframe(dual_corr_df, use_container_width=True)
+        
+        # Add explanation
+        st.info(f"""
+        📝 **Correlation Explanation:**
+        - **Raw Target Correlation**: Correlation with original {selected_target_name} values (1-7 scale)
+        - **Binary Target Correlation**: Correlation with binary {selected_target_name} (0/1 from Top-2-Box)
+        - **Sorted by**: Raw target correlation (descending absolute value)
+        """)
+    else:
+        st.error("❌ Could not find raw target variable for correlation analysis")
 
     st.info("📌 Features prepared successfully! Click **Next ➡️** to proceed to feature selection.")
 
 
 # ──────────────────────────────────────────────────────────────────────────
+def _get_raw_target_column():
+    """Get the original raw target column name based on selected binary target"""
+    
+    selected_target_col = st.session_state.selected_target_col
+    filtered_df = st.session_state.filtered_df
+    
+    # Map binary columns back to original columns
+    target_mapping = {
+        'Binary_LTIB': ['ltip'],
+        'Binary_Rep': ['overall quality'],
+        'Binary_Perception': ['overall perception']
+    }
+    
+    if selected_target_col in target_mapping:
+        keywords = target_mapping[selected_target_col]
+        for col in filtered_df.columns:
+            if any(keyword.lower() in col.lower() for keyword in keywords):
+                return col
+    
+    return None
+
+
+def _calculate_dual_correlations(final_df, raw_target_col, binary_target_col):
+    """Calculate correlations with both raw and binary target variables"""
+    
+    filtered_df = st.session_state.filtered_df
+    feature_list = st.session_state.feature_list
+    
+    corr_rows = []
+    
+    for feat in feature_list:
+        try:
+            # Raw target correlation (from original filtered data)
+            raw_corr = filtered_df[feat].corr(filtered_df[raw_target_col])
+            
+            # Binary target correlation (from final processed data)
+            binary_corr = final_df[feat].corr(final_df[binary_target_col])
+            
+            corr_rows.append({
+                "Feature": feat,
+                "Raw Target Correlation": raw_corr,
+                "Binary Target Correlation": binary_corr,
+                "Abs Raw Correlation": abs(raw_corr) if not pd.isna(raw_corr) else 0
+            })
+        except Exception:
+            # Handle any correlation calculation errors
+            corr_rows.append({
+                "Feature": feat,
+                "Raw Target Correlation": np.nan,
+                "Binary Target Correlation": np.nan,
+                "Abs Raw Correlation": 0
+            })
+    
+    # Create DataFrame and sort by absolute raw correlation (descending)
+    corr_df = (
+        pd.DataFrame(corr_rows)
+        .sort_values("Abs Raw Correlation", ascending=False)
+        .reset_index(drop=True)
+        .loc[:, ["Feature", "Raw Target Correlation", "Binary Target Correlation"]]
+    )
+    
+    # Round to 4 decimal places for better readability
+    corr_df["Raw Target Correlation"] = corr_df["Raw Target Correlation"].round(4)
+    corr_df["Binary Target Correlation"] = corr_df["Binary Target Correlation"].round(4)
+    
+    return corr_df
+
+
 def _display_feature_categories():
     """Helper to show features by category"""
     feature_list = st.session_state.feature_list
 
-    rep_feats   = [f for f in feature_list if "Rep Attributes"     in f]
-    percep_feats= [f for f in feature_list if "Perceptions"        in f]
-    deliv_feats = [f for f in feature_list if "Delivery of topic"  in f]
-    misc_feats  = [f for f in feature_list if f not in rep_feats + percep_feats + deliv_feats]
+    rep_feats = [f for f in feature_list if "Rep Attributes" in f]
+    percep_feats = [f for f in feature_list if "Perceptions" in f]
+    deliv_feats = [f for f in feature_list if "Delivery of topic" in f]
+    misc_feats = [f for f in feature_list if f not in rep_feats + percep_feats + deliv_feats]
 
     tab1, tab2, tab3, tab4 = st.tabs([
         f"📈 Rep Attributes ({len(rep_feats)})",
@@ -161,4 +225,3 @@ def _display_feature_categories():
 # ──────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     render_feature_prep_page()
-
