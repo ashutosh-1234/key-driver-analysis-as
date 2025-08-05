@@ -467,6 +467,17 @@ def train_and_evaluate_model() -> None:
         st.error(f"❌ Error during model training: {str(e)}")
         st.info("This might be due to data quality issues. Please check your data.")
 
+# Store results for Step 13
+st.session_state.regression_model = model
+st.session_state.last_trained_model = model
+st.session_state.model_results = {
+    'regression_model': model,
+    'selected_features': list(X_clean.columns),
+    'X_test': X_test,
+    'y_test': y_test,
+    'y_pred': y_pred,
+    'y_pred_proba': y_prob
+}
 
 # ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
