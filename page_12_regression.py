@@ -323,4 +323,46 @@ def train_and_evaluate_model() -> None:
             "Variable": X_clean.columns,
             "Coefficient": model.coef_[0],
             "AbsCoef": np.abs(model.coef_[0]),
-            "Type": ["Factored" if v in sel_f else "Raw" for v in X_clean.columns
+            "Type": ["Factored" if v in sel_f else "Raw" for v in X_clean.columns]
+        }).sort_values("AbsCoef", ascending=False)
+
+        fig = px.bar(
+            coef_df, y="Variable", x="Coefficient",
+            orientation="h", color="Type",
+            color_discrete_map={"Factored": "#2E86AB", "Raw": "#F24236"},
+            title="Variable Importance (Logistic Regression Coefficients)"
+        )
+        fig.update_layout(height=max(400, len(coef_df) * 28))
+        st.plotly_chart(fig, use_container_width=True)
+
+        # confusion matrix + ROC
+        cm = confusion_matrix(y_test, y_pred)
+        fig_cm = px.imshow(cm, text_auto=True, title="Confusion Matrix",
+                           labels=dict(x="Predicted", y="Actual"),
+                           color_continuous_scale="Blues")
+        st.plotly_chart(fig_cm, use_container_width=True)
+
+        fpr, tpr, _ = roc_curve(y_test, y_prob)
+        fig_roc = go.Figure()
+        fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode="lines",
+                                     name=f"ROC curve (AUC = {auc:.3f})"))
+        fig_roc.add_trace(go.Scatter(x=[0,1], y=[0,1], mode="lines",
+                                     line=dict(dash="dash"), name="Random"))
+        fig_roc.update_layout(title="ROC Curve",
+                              xaxis_title="False Positive Rate",
+                              yaxis_title="True Positive Rate")
+        st.plotly_chart(fig_roc, use_container_width=True)
+
+        # classification report
+        st.subheader("📋 Classification Report")
+        rep = pd.DataFrame(classification_report(y_test, y_pred, output_dict=True)).T
+        st.dataframe(rep.round(3), use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"❌ Error during model training: {str(e)}")
+        st.info("This might be due to data inconsistencies. Please check your data preparation steps.")
+
+# ──────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    show_page()
