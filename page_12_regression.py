@@ -61,10 +61,20 @@ def prepare_regression_data() -> None:
     X_factors = factor_scores_df.reset_index(drop=True)
     y_target = final_model_df[target_col].reset_index(drop=True)
 
-    # Identify raw features that weren't used in factor analysis
-    # Get all original numeric features from step 5
-    all_original_features = st.session_state.get('feature_list', [])
+    # Enhanced raw feature detection
+    # Method 1: Get ALL numeric columns from final_model_df (broader approach)
+    all_numeric_cols = final_model_df.select_dtypes(include=[np.number]).columns.tolist()
     
+    # Method 2: Also check the original feature_list (if available)
+    original_features = st.session_state.get('feature_list', [])
+    
+    # Combine both approaches
+    all_potential_features = list(set(all_numeric_cols + original_features))
+    
+    # Remove target column
+    if target_col in all_potential_features:
+        all_potential_features.remove(target_col)
+
     # Find which features were actually used in successful factor analysis
     used_in_factors = set()
     fa_results = st.session_state.get('fa_results', {})
@@ -73,16 +83,23 @@ def prepare_regression_data() -> None:
         for category_name, results in fa_results.items():
             if results and isinstance(results, dict) and results.get('success', False):
                 used_in_factors.update(results.get('features', []))
-    
-    # Raw features = original features that weren't factored and exist in final_model_df
-    available_columns = set(final_model_df.columns.tolist())
+
+    # Raw features = all potential features that weren't successfully factored
     raw_features = []
-    
-    for feature in all_original_features:
-        if (feature in available_columns and 
-            feature != target_col and 
-            feature not in used_in_factors):
+    for feature in all_potential_features:
+        if (feature in final_model_df.columns and  # Must exist in dataframe
+            feature not in used_in_factors):        # Not used in factor analysis
             raw_features.append(feature)
+
+    # Debug information
+    st.write(f"**🔍 Debug Information:**")
+    st.write(f"- Total numeric columns in data: {len(all_numeric_cols)}")
+    st.write(f"- Original feature_list length: {len(original_features)}")
+    st.write(f"- Features used in factors: {len(used_in_factors)}")
+    st.write(f"- Raw features found: {len(raw_features)}")
+    
+    if raw_features:
+        st.write(f"- Sample raw features: {raw_features[:5]}")
 
     # Store everything in session state
     st.session_state.X_factors = X_factors
@@ -171,7 +188,7 @@ def enhanced_variable_selection_interface() -> None:
                 if "vif_results" in st.session_state:
                     if st.button("🧹 Remove High VIF Factored", key="remove_vif_factored"):
                         high_vif_vars = (
-                            st.session_state.vif_results[st.session_state.vif_results["VIF"] > 10]["Factor"]
+                            st.session_state.vif_results[st.session_state.vif_results["VIF"] > 10]["Variable"]
                             .tolist()
                         )
                         high_vif_vars = [v for v in high_vif_vars if v != "const"]
@@ -225,8 +242,10 @@ def enhanced_variable_selection_interface() -> None:
                 'Rep Attributes': [f for f in raw_features if "Rep Attributes" in f],
                 'Product Perceptions': [f for f in raw_features if "Perceptions" in f],
                 'Message Delivery': [f for f in raw_features if "Delivery of topic" in f],
+                'Topics/Messages': [f for f in raw_features if any(keyword in f.lower() for keyword in ["topic", "message"])],
                 'Miscellaneous': [f for f in raw_features if not any(cat in f for cat in 
-                                 ["Rep Attributes", "Perceptions", "Delivery of topic"])]
+                                 ["Rep Attributes", "Perceptions", "Delivery of topic"]) and 
+                                 not any(keyword in f.lower() for keyword in ["topic", "message"])]
             }
             
             # Remove empty categories
@@ -295,63 +314,67 @@ def calculate_vif_analysis() -> None:
         st.error("⚠️ Please select at least one variable for VIF analysis.")
         return
     
-    # Combine data from different sources
-    combined_data = pd.DataFrame()
-    
-    # Add factored variables
-    if selected_factored:
-        X_factors = st.session_state.X_factors
-        factored_subset = X_factors[selected_factored].reset_index(drop=True)
-        combined_data = pd.concat([combined_data, factored_subset], axis=1)
-    
-    # Add raw variables
-    if selected_raw:
-        final_model_df = st.session_state.final_model_df
-        raw_subset = final_model_df[selected_raw].reset_index(drop=True)
-        # Handle missing values in raw data
-        raw_subset = raw_subset.fillna(raw_subset.median())
-        combined_data = pd.concat([combined_data, raw_subset], axis=1)
-    
-    if combined_data.empty:
-        st.error("❌ No data available for VIF calculation.")
-        return
-    
-    # Add constant and calculate VIF
-    X_const = sm.add_constant(combined_data)
-    
-    vif_df = pd.DataFrame(
-        {
-            "Variable": X_const.columns,
-            "VIF": [variance_inflation_factor(X_const.values, i) for i in range(X_const.shape[1])],
-        }
-    ).sort_values("VIF", ascending=False)
+    try:
+        # Combine data from different sources
+        combined_data = pd.DataFrame()
+        
+        # Add factored variables
+        if selected_factored:
+            X_factors = st.session_state.X_factors
+            factored_subset = X_factors[selected_factored].reset_index(drop=True)
+            combined_data = pd.concat([combined_data, factored_subset], axis=1)
+        
+        # Add raw variables
+        if selected_raw:
+            final_model_df = st.session_state.final_model_df
+            raw_subset = final_model_df[selected_raw].reset_index(drop=True)
+            # Handle missing values in raw data
+            raw_subset = raw_subset.fillna(raw_subset.median())
+            combined_data = pd.concat([combined_data, raw_subset], axis=1)
+        
+        if combined_data.empty:
+            st.error("❌ No data available for VIF calculation.")
+            return
+        
+        # Add constant and calculate VIF
+        X_const = sm.add_constant(combined_data)
+        
+        vif_df = pd.DataFrame(
+            {
+                "Variable": X_const.columns,
+                "VIF": [variance_inflation_factor(X_const.values, i) for i in range(X_const.shape[1])],
+            }
+        ).sort_values("VIF", ascending=False)
 
-    st.write("📊 **VIF Results:**")
-    st.dataframe(vif_df, use_container_width=True)
+        st.write("📊 **VIF Results:**")
+        st.dataframe(vif_df, use_container_width=True)
 
-    # VIF interpretation
-    high_vif = vif_df[vif_df["VIF"] > 10]
-    moderate_vif = vif_df[(vif_df["VIF"] > 5) & (vif_df["VIF"] <= 10)]
-    low_vif = vif_df[vif_df["VIF"] <= 5]
+        # VIF interpretation
+        high_vif = vif_df[vif_df["VIF"] > 10]
+        moderate_vif = vif_df[(vif_df["VIF"] > 5) & (vif_df["VIF"] <= 10)]
+        low_vif = vif_df[vif_df["VIF"] <= 5]
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("High VIF (>10)", len(high_vif))
-    with col2:
-        st.metric("Moderate VIF (5-10)", len(moderate_vif))
-    with col3:
-        st.metric("Low VIF (≤5)", len(low_vif))
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("High VIF (>10)", len(high_vif))
+        with col2:
+            st.metric("Moderate VIF (5-10)", len(moderate_vif))
+        with col3:
+            st.metric("Low VIF (≤5)", len(low_vif))
 
-    if len(high_vif) > 0:
-        st.warning("⚠️ Consider removing variables with VIF > 10")
-        st.write("**High VIF Variables:**")
-        for _, row in high_vif.iterrows():
-            if row["Variable"] != "const":
-                st.write(f"• {row['Variable']}: {row['VIF']:.2f}")
-    else:
-        st.success("✅ No high multicollinearity detected")
+        if len(high_vif) > 0:
+            st.warning("⚠️ Consider removing variables with VIF > 10")
+            st.write("**High VIF Variables:**")
+            for _, row in high_vif.iterrows():
+                if row["Variable"] != "const":
+                    st.write(f"• {row['Variable']}: {row['VIF']:.2f}")
+        else:
+            st.success("✅ No high multicollinearity detected")
 
-    st.session_state.vif_results = vif_df
+        st.session_state.vif_results = vif_df
+        
+    except Exception as e:
+        st.error(f"❌ Error calculating VIF: {str(e)}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -364,57 +387,73 @@ def train_and_evaluate_model() -> None:
         st.error("⚠️ Please select at least one variable.")
         return
 
-    # Combine data from different sources
-    X_combined = pd.DataFrame()
-    
-    # Add factored variables
-    if selected_factored:
-        X_factors = st.session_state.X_factors
-        factored_data = X_factors[selected_factored].reset_index(drop=True)
-        X_combined = pd.concat([X_combined, factored_data], axis=1)
-    
-    # Add raw variables
-    if selected_raw:
-        final_model_df = st.session_state.final_model_df
-        raw_data = final_model_df[selected_raw].reset_index(drop=True)
-        # Handle missing values in raw data
-        raw_data = raw_data.fillna(raw_data.median())
-        X_combined = pd.concat([X_combined, raw_data], axis=1)
-    
-    if X_combined.empty:
-        st.error("⚠️ No data available for modeling.")
-        return
+    try:
+        # Combine data from different sources
+        X_combined = pd.DataFrame()
+        
+        # Add factored variables
+        if selected_factored:
+            X_factors = st.session_state.X_factors
+            factored_data = X_factors[selected_factored].reset_index(drop=True)
+            X_combined = pd.concat([X_combined, factored_data], axis=1)
+        
+        # Add raw variables
+        if selected_raw:
+            final_model_df = st.session_state.final_model_df
+            raw_data = final_model_df[selected_raw].reset_index(drop=True)
+            # Handle missing values in raw data
+            raw_data = raw_data.fillna(raw_data.median())
+            X_combined = pd.concat([X_combined, raw_data], axis=1)
+        
+        if X_combined.empty:
+            st.error("⚠️ No data available for modeling.")
+            return
 
-    y = st.session_state.y_target
-    
-    # Ensure same length
-    min_length = min(len(X_combined), len(y))
-    X_combined = X_combined.iloc[:min_length]
-    y = y.iloc[:min_length]
+        y = st.session_state.y_target
+        
+        # Ensure same length
+        min_length = min(len(X_combined), len(y))
+        X_combined = X_combined.iloc[:min_length]
+        y = y.iloc[:min_length]
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_combined, y, test_size=0.3, random_state=42, stratify=y
-    )
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_combined, y, test_size=0.3, random_state=42, stratify=y
+        )
 
-    with st.spinner("Training logistic regression model…"):
-        model = LogisticRegression(max_iter=1_000, random_state=42)
-        model.fit(X_train, y_train)
+        with st.spinner("Training logistic regression model…"):
+            model = LogisticRegression(max_iter=1_000, random_state=42)
+            model.fit(X_train, y_train)
 
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)[:, 1]
+        y_pred = model.predict(X_test)
+        y_proba = model.predict_proba(X_test)[:, 1]
 
-    display_model_results(
-        model,
-        X_train,
-        X_test,
-        y_train,
-        y_test,
-        y_pred,
-        y_proba,
-        list(X_combined.columns),
-        selected_factored,
-        selected_raw,
-    )
+        # Store results for potential use in next steps
+        st.session_state.regression_model = model
+        st.session_state.model_results = {
+            'X_train': X_train, 'X_test': X_test,
+            'y_train': y_train, 'y_test': y_test,
+            'y_pred': y_pred, 'y_pred_proba': y_proba,
+            'selected_features': list(X_combined.columns),
+            'selected_factored_features': selected_factored,
+            'selected_raw_features': selected_raw,
+            'regression_model': model
+        }
+
+        display_model_results(
+            model,
+            X_train,
+            X_test,
+            y_train,
+            y_test,
+            y_pred,
+            y_proba,
+            list(X_combined.columns),
+            selected_factored,
+            selected_raw,
+        )
+        
+    except Exception as e:
+        st.error(f"❌ Error training model: {str(e)}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
