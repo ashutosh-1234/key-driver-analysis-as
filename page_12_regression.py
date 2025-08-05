@@ -52,7 +52,7 @@ def show_page() -> None:
 
 # ─────────────────────────────────────────────────────────────────────────────
 def prepare_regression_data() -> None:
-    """Create X_factors, y_target, feature_names, and identify raw features."""
+    """Create X_factors, y_target, feature_names, and identify raw features using Step 6 data."""
     factor_scores_df = st.session_state.factor_scores_df
     final_model_df = st.session_state.final_model_df
     target_col = st.session_state.selected_target_col
@@ -61,47 +61,65 @@ def prepare_regression_data() -> None:
     X_factors = factor_scores_df.reset_index(drop=True)
     y_target = final_model_df[target_col].reset_index(drop=True)
 
-    # Enhanced raw feature detection
-    # Method 1: Get ALL numeric columns from final_model_df (broader approach)
-    all_numeric_cols = final_model_df.select_dtypes(include=[np.number]).columns.tolist()
+    # ✅ Get the ORIGINAL feature list from Step 6 (ALL features that were available)
+    original_feature_list = st.session_state.get('feature_list', [])
     
-    # Method 2: Also check the original feature_list (if available)
-    original_features = st.session_state.get('feature_list', [])
-    
-    # Combine both approaches
-    all_potential_features = list(set(all_numeric_cols + original_features))
-    
-    # Remove target column
-    if target_col in all_potential_features:
-        all_potential_features.remove(target_col)
+    # ✅ Get features that were selected for factor analysis in Step 6
+    selected_for_fa = st.session_state.get('selected_features', [])
 
-    # Find which features were actually used in successful factor analysis
-    used_in_factors = set()
-    fa_results = st.session_state.get('fa_results', {})
+    # ✅ Find which features were actually used in SUCCESSFUL factor analysis
+    successfully_factored = set()
     
+    fa_results = st.session_state.get('fa_results', {})
     if fa_results:
         for category_name, results in fa_results.items():
             if results and isinstance(results, dict) and results.get('success', False):
-                used_in_factors.update(results.get('features', []))
+                successfully_factored.update(results.get('features', []))
 
-    # Raw features = all potential features that weren't successfully factored
+    # ✅ Raw features = ALL original features that were NOT successfully factored
+    # This includes:
+    # 1. Features that were selected but not successfully factored
+    # 2. Features that were never selected for factor analysis
     raw_features = []
-    for feature in all_potential_features:
-        if (feature in final_model_df.columns and  # Must exist in dataframe
-            feature not in used_in_factors):        # Not used in factor analysis
+    
+    for feature in original_feature_list:
+        if (feature in final_model_df.columns and      # Must exist in dataframe
+            feature != target_col and                   # Not the target
+            feature not in successfully_factored):      # Not successfully factored
             raw_features.append(feature)
 
-    # Debug information
-    st.write(f"**🔍 Debug Information:**")
-    st.write(f"- Total numeric columns in data: {len(all_numeric_cols)}")
-    st.write(f"- Original feature_list length: {len(original_features)}")
-    st.write(f"- Features used in factors: {len(used_in_factors)}")
-    st.write(f"- Raw features found: {len(raw_features)}")
+    # ✅ Enhanced debug information to understand the data flow
+    st.write(f"**🔍 Step-by-Step Feature Analysis:**")
+    st.write(f"- **Step 5**: Total features available: {len(original_feature_list)}")
+    st.write(f"- **Step 6**: Features selected for factor analysis: {len(selected_for_fa)}")
+    st.write(f"- **Step 9**: Features successfully factored: {len(successfully_factored)}")
+    st.write(f"- **Step 12**: Raw features available: {len(raw_features)}")
     
+    if len(original_feature_list) > 0:
+        st.write(f"- Sample original features: {original_feature_list[:3]}...")
+    if len(selected_for_fa) > 0:
+        st.write(f"- Sample selected for FA: {selected_for_fa[:3]}...")
+    if len(successfully_factored) > 0:
+        st.write(f"- Sample successfully factored: {list(successfully_factored)[:3]}...")
+    if len(raw_features) > 0:
+        st.write(f"- Sample raw features: {raw_features[:3]}...")
+    
+    # Show what categories are available as raw
     if raw_features:
-        st.write(f"- Sample raw features: {raw_features[:5]}")
+        raw_by_category = {
+            'Rep Attributes': [f for f in raw_features if "Rep Attributes" in f],
+            'Product Perceptions': [f for f in raw_features if "Perceptions" in f], 
+            'Message Delivery': [f for f in raw_features if "Delivery of topic" in f],
+            'Miscellaneous': [f for f in raw_features if not any(cat in f for cat in 
+                             ["Rep Attributes", "Perceptions", "Delivery of topic"])]
+        }
+        
+        st.write(f"**Raw features by category:**")
+        for cat, features in raw_by_category.items():
+            if features:
+                st.write(f"- {cat}: {len(features)} features")
 
-    # Store everything in session state
+    # Store everything
     st.session_state.X_factors = X_factors
     st.session_state.y_target = y_target
     st.session_state.feature_names = list(factor_scores_df.columns)
@@ -237,15 +255,13 @@ def enhanced_variable_selection_interface() -> None:
                     st.session_state.selected_raw_features = []
                     st.rerun()
             
-            # Categorize raw features for better organization
+            # Categorize raw features using the same logic as Step 6
             raw_categories = {
                 'Rep Attributes': [f for f in raw_features if "Rep Attributes" in f],
                 'Product Perceptions': [f for f in raw_features if "Perceptions" in f],
                 'Message Delivery': [f for f in raw_features if "Delivery of topic" in f],
-                'Topics/Messages': [f for f in raw_features if any(keyword in f.lower() for keyword in ["topic", "message"])],
                 'Miscellaneous': [f for f in raw_features if not any(cat in f for cat in 
-                                 ["Rep Attributes", "Perceptions", "Delivery of topic"]) and 
-                                 not any(keyword in f.lower() for keyword in ["topic", "message"])]
+                                 ["Rep Attributes", "Perceptions", "Delivery of topic"])]
             }
             
             # Remove empty categories
@@ -255,14 +271,15 @@ def enhanced_variable_selection_interface() -> None:
             for cat, vars_in_cat in raw_categories.items():
                 if vars_in_cat:
                     st.write(f"**{cat} ({len(vars_in_cat)} variables):**")
-                    for var in vars_in_cat:
-                        checked = st.checkbox(
-                            var,
-                            value=var in st.session_state.selected_raw_features,
-                            key=f"raw_{var}",
-                        )
-                        if checked:
-                            selected_raw.append(var)
+                    with st.expander(f"Select from {cat}", expanded=True):
+                        for var in vars_in_cat:
+                            checked = st.checkbox(
+                                var,
+                                value=var in st.session_state.selected_raw_features,
+                                key=f"raw_{var}",
+                            )
+                            if checked:
+                                selected_raw.append(var)
             
             st.session_state.selected_raw_features = selected_raw
         else:
@@ -438,6 +455,11 @@ def train_and_evaluate_model() -> None:
             'selected_raw_features': selected_raw,
             'regression_model': model
         }
+
+        # Mark step as completed
+        if 'step_completed' not in st.session_state:
+            st.session_state.step_completed = {}
+        st.session_state.step_completed[12] = True
 
         display_model_results(
             model,
