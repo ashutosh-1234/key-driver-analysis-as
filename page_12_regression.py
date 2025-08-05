@@ -462,6 +462,25 @@ def train_and_evaluate_model() -> None:
         report = classification_report(y_test, y_pred, output_dict=True)
         report_df = pd.DataFrame(report).transpose()
         st.dataframe(report_df.round(3), use_container_width=True)
+
+        # ──────────────────────────────────────────────────────────────
+        # ADD THIS SECTION HERE - Store results for Step 13
+        # ──────────────────────────────────────────────────────────────
+        st.session_state.regression_model = model
+        st.session_state.last_trained_model = model
+        st.session_state.model_results = {
+            'regression_model': model,
+            'selected_features': list(X.columns),
+            'X_train': X_train,
+            'X_test': X_test,
+            'y_train': y_train,
+            'y_test': y_test,
+            'y_pred': y_pred,
+            'y_pred_proba': y_prob
+        }
+        
+        # Show success message for Step 13 readiness
+        st.success("✅ Model results saved for Step 13 - Final Key Driver Summary")    
         
     except Exception as e:
         st.error(f"❌ Error during model training: {str(e)}")
