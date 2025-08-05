@@ -52,7 +52,7 @@ def show_page() -> None:
 
 # ─────────────────────────────────────────────────────────────────────────────
 def prepare_regression_data() -> None:
-    """Create X_factors, y_target, feature_names, and identify raw features using Step 6 data."""
+    """Create X_factors, y_target, feature_names, and identify raw features."""
     factor_scores_df = st.session_state.factor_scores_df
     final_model_df = st.session_state.final_model_df
     target_col = st.session_state.selected_target_col
@@ -61,51 +61,32 @@ def prepare_regression_data() -> None:
     X_factors = factor_scores_df.reset_index(drop=True)
     y_target = final_model_df[target_col].reset_index(drop=True)
 
-    # ✅ Get the ORIGINAL feature list from Step 6 (ALL features that were available)
-    original_feature_list = st.session_state.get('feature_list', [])
+    # ✅ Get ALL 37 features from Step 5 (the complete feature universe)
+    all_features_step5 = st.session_state.get('feature_list', [])
     
-    # ✅ Get features that were selected for factor analysis in Step 6
-    selected_for_fa = st.session_state.get('selected_features', [])
-
-    # ✅ Find which features were actually used in SUCCESSFUL factor analysis
-    successfully_factored = set()
+    # ✅ Get the 22 features that were selected for factor analysis in Step 6
+    selected_for_factor_analysis = st.session_state.get('selected_features', [])
     
-    fa_results = st.session_state.get('fa_results', {})
-    if fa_results:
-        for category_name, results in fa_results.items():
-            if results and isinstance(results, dict) and results.get('success', False):
-                successfully_factored.update(results.get('features', []))
-
-    # ✅ Raw features = ALL original features that were NOT successfully factored
-    # This includes:
-    # 1. Features that were selected but not successfully factored
-    # 2. Features that were never selected for factor analysis
+    # ✅ Raw features = ALL Step 5 features - Features selected for factor analysis
+    # This gives us the 15 features that were NOT selected for factor analysis
     raw_features = []
-    
-    for feature in original_feature_list:
-        if (feature in final_model_df.columns and      # Must exist in dataframe
-            feature != target_col and                   # Not the target
-            feature not in successfully_factored):      # Not successfully factored
+    for feature in all_features_step5:
+        if (feature not in selected_for_factor_analysis and    # Not selected for FA
+            feature in final_model_df.columns and             # Exists in dataframe
+            feature != target_col):                           # Not the target
             raw_features.append(feature)
 
-    # ✅ Enhanced debug information to understand the data flow
-    st.write(f"**🔍 Step-by-Step Feature Analysis:**")
-    st.write(f"- **Step 5**: Total features available: {len(original_feature_list)}")
-    st.write(f"- **Step 6**: Features selected for factor analysis: {len(selected_for_fa)}")
-    st.write(f"- **Step 9**: Features successfully factored: {len(successfully_factored)}")
-    st.write(f"- **Step 12**: Raw features available: {len(raw_features)}")
+    # ✅ Debug information to verify the math
+    st.write(f"**🔍 Feature Accounting:**")
+    st.write(f"- **Step 5**: Total features available: {len(all_features_step5)}")
+    st.write(f"- **Step 6**: Features selected for factor analysis: {len(selected_for_factor_analysis)}")
+    st.write(f"- **Step 12**: Raw features (not selected for FA): {len(raw_features)}")
+    st.write(f"- **Math Check**: {len(all_features_step5)} - {len(selected_for_factor_analysis)} = {len(raw_features)}")
     
-    if len(original_feature_list) > 0:
-        st.write(f"- Sample original features: {original_feature_list[:3]}...")
-    if len(selected_for_fa) > 0:
-        st.write(f"- Sample selected for FA: {selected_for_fa[:3]}...")
-    if len(successfully_factored) > 0:
-        st.write(f"- Sample successfully factored: {list(successfully_factored)[:3]}...")
-    if len(raw_features) > 0:
-        st.write(f"- Sample raw features: {raw_features[:3]}...")
-    
-    # Show what categories are available as raw
     if raw_features:
+        st.write(f"- **Sample raw features**: {raw_features[:5]}")
+        
+        # Show category breakdown of raw features
         raw_by_category = {
             'Rep Attributes': [f for f in raw_features if "Rep Attributes" in f],
             'Product Perceptions': [f for f in raw_features if "Perceptions" in f], 
@@ -117,7 +98,7 @@ def prepare_regression_data() -> None:
         st.write(f"**Raw features by category:**")
         for cat, features in raw_by_category.items():
             if features:
-                st.write(f"- {cat}: {len(features)} features")
+                st.write(f"- **{cat}**: {len(features)} features")
 
     # Store everything
     st.session_state.X_factors = X_factors
@@ -168,7 +149,7 @@ def display_data_summary() -> None:
                 for i, raw in enumerate(raw_features, 1):
                     st.write(f"{i}. {raw}")
         else:
-            st.info("No raw variables available (all features were factored).")
+            st.info("No raw variables available.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -241,7 +222,7 @@ def enhanced_variable_selection_interface() -> None:
             st.info("No factored variables available.")
     
     with tab2:
-        st.write("**Select raw variables (not included in factor analysis):**")
+        st.write("**Select raw variables (not selected for factor analysis in Step 6):**")
         
         if raw_features:
             # Bulk buttons for raw variables
@@ -255,7 +236,7 @@ def enhanced_variable_selection_interface() -> None:
                     st.session_state.selected_raw_features = []
                     st.rerun()
             
-            # Categorize raw features using the same logic as Step 6
+            # Categorize raw features using the same logic as Step 5 and 6
             raw_categories = {
                 'Rep Attributes': [f for f in raw_features if "Rep Attributes" in f],
                 'Product Perceptions': [f for f in raw_features if "Perceptions" in f],
@@ -283,7 +264,7 @@ def enhanced_variable_selection_interface() -> None:
             
             st.session_state.selected_raw_features = selected_raw
         else:
-            st.info("No raw variables available (all original features were factored).")
+            st.info("No raw variables available (all features were selected for factor analysis).")
     
     with tab3:
         display_selection_summary()
