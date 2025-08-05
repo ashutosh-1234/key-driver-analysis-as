@@ -19,8 +19,8 @@ def show_page():
         
     model, X_test, y_test, selected_features = required_data
     
-    # Build impact dataframe
-    coef_df = build_impact_df(model, selected_features)
+    # Build impact dataframe - now mapping to raw features
+    coef_df = build_impact_df_with_raw_features(model, selected_features)
     
     # Feature selector
     st.subheader("✅ Select the final set of drivers to include")
@@ -110,8 +110,8 @@ def check_prerequisites():
     
     return model, X_test, y_test, selected_features
 
-def build_impact_df(model, selected_features: list) -> pd.DataFrame:
-    """Build impact dataframe from model coefficients."""
+def build_impact_df_with_raw_features(model, selected_features: list) -> pd.DataFrame:
+    """Build impact dataframe mapping factors back to raw features using loading matrix."""
     try:
         # Get coefficients
         if hasattr(model, 'coef_'):
@@ -129,7 +129,8 @@ def build_impact_df(model, selected_features: list) -> pd.DataFrame:
         
         base_df = pd.DataFrame({
             "Variable": selected_features, 
-            "Beta": betas
+            "Beta": betas,
+            "Type": ["Factored" if "Factor" in var else "Raw" for var in selected_features]
         })
         
         # Calculate impact percentages
@@ -141,27 +142,95 @@ def build_impact_df(model, selected_features: list) -> pd.DataFrame:
         else:
             base_df["Impact_%"] = (base_df["Abs_Beta"] / total_abs_impact) * 100
         
-        # Check for external normalized impacts
-        if hasattr(st.session_state, 'normalized_impacts') and st.session_state.normalized_impacts:
-            ext_imp = st.session_state.normalized_impacts
-            ext_df = pd.DataFrame(list(ext_imp.items()), columns=["Variable", "Impact_%"])
-            base_df = (
-                base_df.drop(columns=["Impact_%"])
-                .merge(ext_df, on="Variable", how="left")
-                .fillna(0)
-            )
+        # Map factors to raw features using loading matrix
+        raw_impacts = map_factors_to_raw_features(base_df)
         
-        # Signed impact for waterfall
-        base_df["Signed_Impact"] = np.where(
-            base_df["Beta"] > 0, 
-            base_df["Impact_%"], 
-            -base_df["Impact_%"]
-        )
+        if raw_impacts.empty:
+            # Fallback to original if mapping fails
+            return base_df.sort_values("Impact_%", ascending=False).reset_index(drop=True)
         
-        return base_df.sort_values("Impact_%", ascending=False).reset_index(drop=True)
+        return raw_impacts
         
     except Exception as e:
         st.error(f"Error building impact dataframe: {str(e)}")
+        return pd.DataFrame()
+
+def map_factors_to_raw_features(coef_df: pd.DataFrame) -> pd.DataFrame:
+    """Map factor impacts to raw features using the loading matrix from factor analysis."""
+    try:
+        # Check if loading matrix is available from factor analysis
+        if not hasattr(st.session_state, 'loading_matrix') or st.session_state.loading_matrix is None:
+            st.warning("⚠️ Loading matrix not found. Using factor names instead of raw features.")
+            return coef_df
+        
+        loading_matrix = st.session_state.loading_matrix
+        
+        # Initialize raw impacts dictionary
+        raw_impacts = {}
+        
+        # Process factored variables
+        factored_vars = coef_df[coef_df['Type'] == 'Factored']
+        
+        for _, row in factored_vars.iterrows():
+            factor_name = row['Variable']
+            factor_impact = row['Impact_%']
+            factor_beta = row['Beta']
+            
+            # Extract factor number/name for matching with loading matrix
+            if 'Factor' in factor_name:
+                # Try to find matching column in loading matrix
+                possible_cols = [col for col in loading_matrix.columns if 'Factor' in col and col in factor_name]
+                if not possible_cols:
+                    # Try different matching patterns
+                    factor_num = factor_name.split('_')[-1]  # Get last part after underscore
+                    possible_cols = [col for col in loading_matrix.columns if factor_num in col]
+                
+                if possible_cols:
+                    factor_col = possible_cols[0]
+                    
+                    # Get the feature column (first column usually contains feature names)
+                    feature_col = loading_matrix.columns[0]
+                    
+                    # For each raw feature, calculate weighted impact based on loading
+                    for _, loading_row in loading_matrix.iterrows():
+                        raw_feature = loading_row[feature_col]
+                        loading_value = abs(loading_row[factor_col])  # Use absolute loading
+                        
+                        # Weight the factor impact by the loading strength
+                        weighted_impact = factor_impact * loading_value
+                        
+                        # Accumulate impacts for each raw feature
+                        if raw_feature in raw_impacts:
+                            raw_impacts[raw_feature] += weighted_impact
+                        else:
+                            raw_impacts[raw_feature] = weighted_impact
+        
+        # Add raw variables (non-factored) directly
+        raw_vars = coef_df[coef_df['Type'] == 'Raw']
+        for _, row in raw_vars.iterrows():
+            raw_feature = row['Variable']
+            impact = row['Impact_%']
+            raw_impacts[raw_feature] = raw_impacts.get(raw_feature, 0) + impact
+        
+        # Convert to DataFrame
+        if raw_impacts:
+            raw_impact_df = pd.DataFrame(
+                list(raw_impacts.items()), 
+                columns=['Variable', 'Impact_%']
+            )
+            
+            # Sort by impact
+            raw_impact_df = raw_impact_df.sort_values('Impact_%', ascending=False).reset_index(drop=True)
+            
+            # Add Type column
+            raw_impact_df['Type'] = 'Raw'
+            
+            return raw_impact_df
+        else:
+            return pd.DataFrame()
+            
+    except Exception as e:
+        st.error(f"Error mapping factors to raw features: {str(e)}")
         return pd.DataFrame()
 
 def make_impact_bar(impact_df: pd.DataFrame, picked_vars: list):
@@ -201,7 +270,7 @@ def make_impact_bar(impact_df: pd.DataFrame, picked_vars: list):
             orientation="h",
             text="Impact_%",
             height=max(400, 40 * len(plot_df)),
-            title="Normalized Impact of Selected Drivers"
+            title="Normalized Impact of Selected Drivers (Raw Features)"
         )
         
         # Update colors
@@ -280,7 +349,7 @@ def make_waterfall_chart(impact_df: pd.DataFrame, picked_vars: list, y_target):
             )
         
         fig.update_layout(
-            title="Projected Lift with Driver Optimization",
+            title="Projected Lift with Driver Optimization (Raw Features)",
             yaxis_title="Top-2-Box Level (%)",
             xaxis_title="Scenario",
             showlegend=False,
