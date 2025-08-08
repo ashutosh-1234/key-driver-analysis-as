@@ -15,7 +15,7 @@ def show_page():
     if model is None:
         return
 
-    # Build impact dataframe—showing IMPACT AT RAW FEATURE LEVEL
+    # Map factor impacts to raw features using loadings from Step 9
     impact_df = get_raw_feature_impact_df(model, selected_features)
 
     st.subheader("✅ Select drivers for summary")
@@ -27,7 +27,7 @@ def show_page():
     final_vars = st.multiselect(
         "Choose variables",
         options=all_vars, default=st.session_state.final_vars,
-        help="These will be reflected in the following plots."
+        help="Selected drivers are reflected in the bar & waterfall charts."
     )
     st.session_state.final_vars = final_vars
 
@@ -48,10 +48,7 @@ def show_page():
         "Waterfall = projected Top-5 and Top-10 uplift vs. current level."
     )
 
-# --- Data sourcing
-
 def check_prerequisites():
-    # Try multiple fallback strategies
     model = None
     selected_features = None
     X_test = None
@@ -92,28 +89,21 @@ def check_prerequisites():
 
     return model, X_test, y_test, selected_features
 
-# --- Core: impact allocation and display
-
 def get_raw_feature_impact_df(model, selected_features):
-    # Get coefficients & classification of variable types
     model_coefs = np.asarray(model.coef_).flatten()
     feat_types = ["Factored" if "Factor" in f else "Raw" for f in selected_features]
 
-    # Step 1: Get initial impact at regression variable level
     df = pd.DataFrame({"Variable": selected_features, "Beta": model_coefs, "Type": feat_types})
     df["Abs_Beta"] = df["Beta"].abs()
     total_abs = df["Abs_Beta"].sum()
     df["Impact_%"] = 0.0 if total_abs == 0 else (df["Abs_Beta"] / total_abs) * 100
 
-    # Step 2: Map factored impact to raw features, using step 9's loading matrices
     fa_results = st.session_state.get("fa_results", {})
     raw_impact_dict = {}
 
-    # --- Map from each factored variable ("category_factor") to its loading matrix and raw features
     for _, row in df[df.Type == "Factored"].iterrows():
         factor_var = row["Variable"]
         factor_impact = row["Impact_%"]
-        # Try to resolve this factor's category & factor number
         found = False
         for cat, res in fa_results.items():
             if not res.get('success'):
@@ -123,9 +113,9 @@ def get_raw_feature_impact_df(model, selected_features):
                 continue
             factor_cols = [col for col in loadings.columns if "Factor" in str(col)]
             for fc in factor_cols:
-                # Match "Factor_X" at the end (e.g. "Rep Attributes_Factor_1")
                 if factor_var == f"{cat}_{fc}":
-                    for i, rfeat in enumerate(loadings.iloc[:, 0]):
+                    feature_col = loadings.columns[0]  # Raw feature names column
+                    for i, rfeat in enumerate(loadings[feature_col]):
                         loading_val = abs(loadings.iloc[i][fc])
                         if loading_val > 0:
                             raw_impact_dict[rfeat] = raw_impact_dict.get(rfeat, 0) + factor_impact * loading_val
@@ -134,20 +124,17 @@ def get_raw_feature_impact_df(model, selected_features):
             if found:
                 break
         if not found:
-            st.warning(f"Loading not found for {factor_var}; skipping.")
+            st.warning(f"Loadings not found for {factor_var}, skipping.")
 
-    # --- Add in any directly entered raw predictors ("Raw" variables in the model)
     for _, row in df[df.Type == "Raw"].iterrows():
         raw_feat = row["Variable"]
         impact = row["Impact_%"]
         raw_impact_dict[raw_feat] = raw_impact_dict.get(raw_feat, 0) + impact
 
-    # --- If allocation yields nothing, fallback to old logic (should never happen)
     if not raw_impact_dict:
         st.warning("⚠️ No raw-feature mapping found: defaulting to model input variables.")
         return df[["Variable", "Impact_%"]].sort_values("Impact_%", ascending=False).reset_index(drop=True)
 
-    # Step 3: Normalize so impacts add to 100%
     raw_df = pd.DataFrame(list(raw_impact_dict.items()), columns=["Variable", "Impact_%"])
     tot = raw_df["Impact_%"].sum()
     if tot != 0:
@@ -156,8 +143,6 @@ def get_raw_feature_impact_df(model, selected_features):
         raw_df["Impact_%"] = 0.0
     raw_df = raw_df.sort_values("Impact_%", ascending=False).reset_index(drop=True)
     return raw_df
-
-# --- Plots
 
 def make_impact_bar(impact_df: pd.DataFrame, picked_vars: list):
     try:
@@ -187,16 +172,8 @@ def make_impact_bar(impact_df: pd.DataFrame, picked_vars: list):
             height=max(400, 40 * len(plot_df)),
             title="Normalized Impact of Selected Drivers (Raw Features)"
         )
-        fig.update_traces(
-            marker_color=colors,
-            texttemplate="%{text:.1f}%",
-            textposition="outside"
-        )
-        fig.update_layout(
-            xaxis_title="Impact (%)",
-            yaxis_title="",
-            showlegend=False
-        )
+        fig.update_traces(marker_color=colors, texttemplate="%{text:.1f}%", textposition="outside")
+        fig.update_layout(xaxis_title="Impact (%)", yaxis_title="", showlegend=False)
         return fig
     except Exception as e:
         st.error(f"Error creating bar chart: {str(e)}")
@@ -258,4 +235,3 @@ def make_waterfall_chart(impact_df: pd.DataFrame, picked_vars: list, y_target):
 
 if __name__ == "__main__":
     show_page()
-
