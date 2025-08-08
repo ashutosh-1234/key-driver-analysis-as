@@ -38,7 +38,7 @@ def show_page():
         label="Choose variables",
         options=all_vars,
         default=st.session_state.final_vars,
-        help="These are the original survey questions/features that will be reflected in the charts."
+        help="These are the original survey questions that will be reflected in the charts."
     )
     
     st.session_state.final_vars = final_vars
@@ -140,7 +140,7 @@ def build_raw_feature_impact_df(model, selected_features: list) -> pd.DataFrame:
         else:
             model_df["Impact_%"] = (model_df["Abs_Beta"] / total_abs_impact) * 100
         
-        # Map to raw features
+        # Map to raw features using Step 9 fa_results
         raw_impacts = {}
         
         # Get FA results from Step 9
@@ -157,7 +157,7 @@ def build_raw_feature_impact_df(model, selected_features: list) -> pd.DataFrame:
                 raw_impacts[var_name] = raw_impacts.get(var_name, 0) + var_impact
             
             elif var_type == 'Factored':
-                # Map factored variables to raw features using loadings
+                # Map factored variables to raw features using loadings from fa_results
                 factor_mapped = False
                 
                 # Find which category this factor belongs to
@@ -186,11 +186,12 @@ def build_raw_feature_impact_df(model, selected_features: list) -> pd.DataFrame:
                         # Get feature names (first column in loadings)
                         feature_col = loadings_df.columns[0]
                         
-                        # Calculate total absolute loadings for normalization
-                        total_abs_loadings = loadings_df[factor_col].abs().sum()
+                        # Calculate total absolute loadings for proper proportional allocation
+                        factor_loadings = loadings_df[factor_col].abs()
+                        total_abs_loadings = factor_loadings.sum()
                         
                         if total_abs_loadings > 0:
-                            # Distribute factor impact to raw features based on loadings
+                            # Distribute factor impact to raw features based on their loadings
                             for idx, raw_feature in enumerate(loadings_df[feature_col]):
                                 loading_value = abs(loadings_df.iloc[idx][factor_col])
                                 
@@ -203,7 +204,8 @@ def build_raw_feature_impact_df(model, selected_features: list) -> pd.DataFrame:
                         break
                 
                 if not factor_mapped:
-                    # If mapping failed, keep the factor name
+                    # If mapping failed, keep the factor name as fallback
+                    st.warning(f"Could not map factor '{var_name}' to raw features. Using factor name.")
                     raw_impacts[var_name] = raw_impacts.get(var_name, 0) + var_impact
         
         # Convert to DataFrame
