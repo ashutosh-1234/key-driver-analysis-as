@@ -30,14 +30,21 @@ def show_page():
     st.subheader("✅ Select the final set of drivers to include")
     all_vars = coef_df["Variable"].tolist()
     
+    # ✅ FIX: Ensure final_vars only contains values that exist in all_vars
     if "final_vars" not in st.session_state:
         # Default: all variables with positive impact
         st.session_state.final_vars = coef_df[coef_df["Impact_%"] > 0]["Variable"].tolist()
+    else:
+        # ✅ CRITICAL FIX: Filter out any values that don't exist in current options
+        st.session_state.final_vars = [var for var in st.session_state.final_vars if var in all_vars]
+    
+    # ✅ Additional safety check: Ensure default values are in options
+    valid_defaults = [var for var in st.session_state.final_vars if var in all_vars]
     
     final_vars = st.multiselect(
         label="Choose variables",
         options=all_vars,
-        default=st.session_state.final_vars,
+        default=valid_defaults,  # ✅ Use validated defaults
         help="These are the original survey questions that will be reflected in the charts."
     )
     
@@ -120,7 +127,6 @@ def build_impact_df_with_raw_features(model, selected_features: list) -> pd.Data
         
         # Ensure we have the right number of features
         if len(selected_features) != len(betas):
-            st.warning(f"Feature count mismatch: {len(selected_features)} features vs {len(betas)} coefficients")
             min_len = min(len(selected_features), len(betas))
             selected_features = selected_features[:min_len]
             betas = betas[:min_len]
@@ -140,11 +146,11 @@ def build_impact_df_with_raw_features(model, selected_features: list) -> pd.Data
         else:
             base_df["Impact_%"] = (base_df["Abs_Beta"] / total_abs_impact) * 100
         
-        # Map factors to raw features using Step 10 loadings
+        # Try to map factors to raw features using Step 10 loadings
         raw_impacts = map_factors_to_raw_features_from_step10(base_df)
         
         if raw_impacts.empty:
-            st.info("ℹ️ No factor-to-raw mapping performed. Showing model variables directly.")
+            st.info("ℹ️ Using factor variables directly (raw feature mapping not available).")
             return base_df.sort_values("Impact_%", ascending=False).reset_index(drop=True)
         
         return raw_impacts
@@ -300,7 +306,7 @@ def make_impact_bar(impact_df: pd.DataFrame, picked_vars: list):
             orientation="h",
             text="Impact_%",
             height=max(400, 40 * len(plot_df)),
-            title="Normalized Impact of Selected Drivers (Raw Features)"
+            title="Normalized Impact of Selected Drivers"
         )
         
         # Update colors
@@ -379,7 +385,7 @@ def make_waterfall_chart(impact_df: pd.DataFrame, picked_vars: list, y_target):
             )
         
         fig.update_layout(
-            title="Projected Lift with Driver Optimization (Raw Features)",
+            title="Projected Lift with Driver Optimization",
             yaxis_title="Top-2-Box Level (%)",
             xaxis_title="Scenario",
             showlegend=False,
