@@ -12,15 +12,15 @@ TOP_N_LIST = [5, 10]    # for the waterfall scenarios
 def show_page():
     st.header("🎯 Step 13: Final Key Driver Summary")
     
-    # More flexible prerequisite checks
+    # Check prerequisites
     required_data = check_prerequisites()
     if not required_data:
         return
         
     model, X_test, y_test, selected_features = required_data
     
-    # Build impact dataframe - now mapping to raw features using Step 9 loadings
-    coef_df = build_impact_df_with_raw_features(model, selected_features)
+    # Build impact dataframe - mapping to raw features using Step 9 loadings
+    coef_df = build_raw_feature_impact_df(model, selected_features)
     
     if coef_df.empty:
         st.error("❌ No impact data available. Please check that factor analysis was completed successfully.")
@@ -38,7 +38,7 @@ def show_page():
         label="Choose variables",
         options=all_vars,
         default=st.session_state.final_vars,
-        help="These will be reflected in the bar & waterfall charts."
+        help="These are the original survey questions/features that will be reflected in the charts."
     )
     
     st.session_state.final_vars = final_vars
@@ -63,21 +63,19 @@ def show_page():
     )
 
 def check_prerequisites():
-    """Check for required data from Step 12 in various possible locations."""
-    
-    # Try multiple possible sources for the model and results
+    """Check for required data from Step 12."""
     model = None
     selected_features = None
     X_test = None
     y_test = None
     
-    # Option 1: Direct from session state (new format)
+    # Get model from various possible locations
     if hasattr(st.session_state, 'last_trained_model'):
         model = st.session_state.last_trained_model
     elif hasattr(st.session_state, 'regression_model'):
         model = st.session_state.regression_model
     
-    # Option 2: From model_results dict
+    # Get from model_results dict
     if hasattr(st.session_state, 'model_results') and st.session_state.model_results:
         results = st.session_state.model_results
         if 'regression_model' in results:
@@ -89,22 +87,18 @@ def check_prerequisites():
         if 'y_test' in results:
             y_test = results['y_test']
     
-    # Option 3: Try to reconstruct from available data
     if model is None:
         st.error("⚠️ Missing trained model from Step 12.")
         st.info("Please complete Step 12 (Logistic Regression Analysis) first.")
         return None
     
-    # Get selected features if not available
     if selected_features is None:
         if hasattr(st.session_state, 'sel_factored') and hasattr(st.session_state, 'sel_raw'):
             selected_features = st.session_state.sel_factored + st.session_state.sel_raw
         else:
             st.error("⚠️ Missing selected features information.")
-            st.info("Please complete Step 12 variable selection first.")
             return None
     
-    # Get test data if not available - reconstruct if needed
     if y_test is None:
         if hasattr(st.session_state, 'y_target'):
             y_test = st.session_state.y_target
@@ -114,97 +108,83 @@ def check_prerequisites():
     
     return model, X_test, y_test, selected_features
 
-def build_impact_df_with_raw_features(model, selected_features: list) -> pd.DataFrame:
-    """Build impact dataframe mapping factors back to raw features using Step 9 loadings."""
+def build_raw_feature_impact_df(model, selected_features: list) -> pd.DataFrame:
+    """Build impact dataframe showing impacts at RAW FEATURE level using Step 9 loadings."""
     try:
-        # Get coefficients
+        # Get coefficients from model
         if hasattr(model, 'coef_'):
             betas = model.coef_[0]
         else:
             st.error("Invalid model object - no coefficients found.")
             return pd.DataFrame()
         
-        # Ensure we have the right number of features
+        # Ensure feature-coefficient alignment
         if len(selected_features) != len(betas):
-            st.warning(f"Feature count mismatch: {len(selected_features)} features vs {len(betas)} coefficients")
             min_len = min(len(selected_features), len(betas))
             selected_features = selected_features[:min_len]
             betas = betas[:min_len]
         
-        base_df = pd.DataFrame({
+        # Create model-level impact dataframe
+        model_df = pd.DataFrame({
             "Variable": selected_features, 
             "Beta": betas,
             "Type": ["Factored" if "Factor" in var else "Raw" for var in selected_features]
         })
         
-        # Calculate initial impact percentages
-        base_df["Abs_Beta"] = base_df["Beta"].abs()
-        total_abs_impact = base_df["Abs_Beta"].sum()
+        # Calculate model-level impacts
+        model_df["Abs_Beta"] = model_df["Beta"].abs()
+        total_abs_impact = model_df["Abs_Beta"].sum()
         
         if total_abs_impact == 0:
-            base_df["Impact_%"] = 0
+            model_df["Impact_%"] = 0
         else:
-            base_df["Impact_%"] = (base_df["Abs_Beta"] / total_abs_impact) * 100
+            model_df["Impact_%"] = (model_df["Abs_Beta"] / total_abs_impact) * 100
         
-        # Map factors to raw features using loading matrices from Step 9
-        raw_impacts = map_factors_to_raw_features_from_step9(base_df)
-        
-        if raw_impacts.empty:
-            st.info("ℹ️ No factor-to-raw mapping performed. Showing model variables directly.")
-            return base_df.sort_values("Impact_%", ascending=False).reset_index(drop=True)
-        
-        return raw_impacts
-        
-    except Exception as e:
-        st.error(f"Error building impact dataframe: {str(e)}")
-        return pd.DataFrame()
-
-def map_factors_to_raw_features_from_step9(coef_df: pd.DataFrame) -> pd.DataFrame:
-    """Map factor impacts to raw features using the loadings from fa_results (Step 9)."""
-    try:
-        # Check if fa_results is available from Step 9
-        if not hasattr(st.session_state, 'fa_results') or st.session_state.fa_results is None:
-            return pd.DataFrame()
-        
-        fa_results = st.session_state.fa_results
-        
-        # Initialize raw impacts dictionary
+        # Map to raw features
         raw_impacts = {}
         
-        # Process factored variables
-        factored_vars = coef_df[coef_df['Type'] == 'Factored']
+        # Get FA results from Step 9
+        fa_results = st.session_state.get('fa_results', {})
         
-        for _, row in factored_vars.iterrows():
-            factor_var = row['Variable']  # e.g., "Rep Attributes_Factor_1"
-            factor_impact = row['Impact_%']
+        # Process each model variable
+        for _, row in model_df.iterrows():
+            var_name = row['Variable']
+            var_impact = row['Impact_%']
+            var_type = row['Type']
             
-            # Parse factor variable name to find category and factor number
-            # Expected format: "Category_Factor_N"
-            factor_mapped = False
+            if var_type == 'Raw':
+                # Raw variables go directly
+                raw_impacts[var_name] = raw_impacts.get(var_name, 0) + var_impact
             
-            for category, results in fa_results.items():
-                if not results.get('success', False):
-                    continue
-                    
-                loadings_df = results.get('loadings')
-                if loadings_df is None or not isinstance(loadings_df, pd.DataFrame):
-                    continue
+            elif var_type == 'Factored':
+                # Map factored variables to raw features using loadings
+                factor_mapped = False
                 
-                # Check if this factor belongs to this category
-                if factor_var.startswith(category + '_Factor_'):
-                    # Extract factor number from variable name
-                    try:
-                        factor_part = factor_var.replace(category + '_Factor_', '')
-                        factor_num = int(factor_part) - 1  # Convert to 0-based index
-                    except ValueError:
+                # Find which category this factor belongs to
+                for category, results in fa_results.items():
+                    if not results.get('success', False):
                         continue
                     
-                    # Get factor columns from loadings dataframe
-                    factor_cols = [col for col in loadings_df.columns if 'Factor_' in str(col)]
-                    
-                    if factor_num < len(factor_cols):
-                        factor_col = factor_cols[factor_num]
-                        feature_col = loadings_df.columns[0]  # First column contains feature names
+                    # Check if this factor belongs to this category
+                    if var_name.startswith(category + '_Factor_'):
+                        loadings_df = results.get('loadings')
+                        if loadings_df is None or not isinstance(loadings_df, pd.DataFrame):
+                            continue
+                        
+                        # Extract factor number from variable name (e.g., "Rep Attributes_Factor_1" -> 1)
+                        try:
+                            factor_part = var_name.replace(category + '_Factor_', '')
+                            factor_num = int(factor_part)
+                        except ValueError:
+                            continue
+                        
+                        # Find the corresponding factor column in loadings
+                        factor_col = f"Factor_{factor_num}"
+                        if factor_col not in loadings_df.columns:
+                            continue
+                        
+                        # Get feature names (first column in loadings)
+                        feature_col = loadings_df.columns[0]
                         
                         # Calculate total absolute loadings for normalization
                         total_abs_loadings = loadings_df[factor_col].abs().sum()
@@ -214,28 +194,17 @@ def map_factors_to_raw_features_from_step9(coef_df: pd.DataFrame) -> pd.DataFram
                             for idx, raw_feature in enumerate(loadings_df[feature_col]):
                                 loading_value = abs(loadings_df.iloc[idx][factor_col])
                                 
-                                # Proportional allocation based on absolute loading
                                 if loading_value > 0:
-                                    weighted_impact = factor_impact * (loading_value / total_abs_loadings)
-                                    
-                                    if raw_feature in raw_impacts:
-                                        raw_impacts[raw_feature] += weighted_impact
-                                    else:
-                                        raw_impacts[raw_feature] = weighted_impact
+                                    # Proportional allocation based on loading strength
+                                    weighted_impact = var_impact * (loading_value / total_abs_loadings)
+                                    raw_impacts[raw_feature] = raw_impacts.get(raw_feature, 0) + weighted_impact
                         
                         factor_mapped = True
                         break
-        
-        # Add raw variables (non-factored) directly
-        raw_vars = coef_df[coef_df['Type'] == 'Raw']
-        for _, row in raw_vars.iterrows():
-            raw_feature = row['Variable']
-            impact = row['Impact_%']
-            
-            if raw_feature in raw_impacts:
-                raw_impacts[raw_feature] += impact
-            else:
-                raw_impacts[raw_feature] = impact
+                
+                if not factor_mapped:
+                    # If mapping failed, keep the factor name
+                    raw_impacts[var_name] = raw_impacts.get(var_name, 0) + var_impact
         
         # Convert to DataFrame
         if raw_impacts:
@@ -247,17 +216,18 @@ def map_factors_to_raw_features_from_step9(coef_df: pd.DataFrame) -> pd.DataFram
             # Sort by impact
             raw_impact_df = raw_impact_df.sort_values('Impact_%', ascending=False).reset_index(drop=True)
             
-            # Ensure impacts sum to 100%
+            # Renormalize to ensure 100% total
             total_impact = raw_impact_df['Impact_%'].sum()
             if total_impact > 0:
                 raw_impact_df['Impact_%'] = (raw_impact_df['Impact_%'] / total_impact) * 100
             
             return raw_impact_df
         else:
-            return pd.DataFrame()
+            st.warning("No impacts calculated - using model variables directly")
+            return model_df[["Variable", "Impact_%"]].sort_values("Impact_%", ascending=False).reset_index(drop=True)
             
     except Exception as e:
-        st.error(f"Error mapping factors to raw features: {str(e)}")
+        st.error(f"Error building raw feature impact dataframe: {str(e)}")
         return pd.DataFrame()
 
 def make_impact_bar(impact_df: pd.DataFrame, picked_vars: list):
