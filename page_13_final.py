@@ -22,12 +22,8 @@ def show_page():
     # Build impact dataframe - now mapping to raw features using Step 9 loadings
     coef_df = build_impact_df_with_raw_features(model, selected_features)
     
-    # Debug: Show what we got
-    st.write("**Debug - Impact DataFrame:**")
-    st.dataframe(coef_df.head(10))
-    
     if coef_df.empty:
-        st.error("❌ No impact data available. Please check the mapping process.")
+        st.error("❌ No impact data available. Please check that factor analysis was completed successfully.")
         return
     
     # Feature selector
@@ -154,7 +150,7 @@ def build_impact_df_with_raw_features(model, selected_features: list) -> pd.Data
         raw_impacts = map_factors_to_raw_features_from_step9(base_df)
         
         if raw_impacts.empty:
-            st.warning("⚠️ Could not map to raw features. Using factored variables.")
+            st.info("ℹ️ No factor-to-raw mapping performed. Showing model variables directly.")
             return base_df.sort_values("Impact_%", ascending=False).reset_index(drop=True)
         
         return raw_impacts
@@ -168,7 +164,6 @@ def map_factors_to_raw_features_from_step9(coef_df: pd.DataFrame) -> pd.DataFram
     try:
         # Check if fa_results is available from Step 9
         if not hasattr(st.session_state, 'fa_results') or st.session_state.fa_results is None:
-            st.warning("⚠️ Factor analysis results not found from Step 9.")
             return pd.DataFrame()
         
         fa_results = st.session_state.fa_results
@@ -197,15 +192,16 @@ def map_factors_to_raw_features_from_step9(coef_df: pd.DataFrame) -> pd.DataFram
                 
                 # Check if this factor belongs to this category
                 if factor_var.startswith(category + '_Factor_'):
-                    # Extract factor number
-                    factor_num_str = factor_var.replace(category + '_Factor_', '')
+                    # Extract factor number from variable name
                     try:
-                        factor_num = int(factor_num_str) - 1  # Convert to 0-based index
+                        factor_part = factor_var.replace(category + '_Factor_', '')
+                        factor_num = int(factor_part) - 1  # Convert to 0-based index
                     except ValueError:
                         continue
                     
-                    # Check if factor number exists in loadings
-                    factor_cols = [col for col in loadings_df.columns if 'Factor' in str(col)]
+                    # Get factor columns from loadings dataframe
+                    factor_cols = [col for col in loadings_df.columns if 'Factor_' in str(col)]
+                    
                     if factor_num < len(factor_cols):
                         factor_col = factor_cols[factor_num]
                         feature_col = loadings_df.columns[0]  # First column contains feature names
@@ -229,9 +225,6 @@ def map_factors_to_raw_features_from_step9(coef_df: pd.DataFrame) -> pd.DataFram
                         
                         factor_mapped = True
                         break
-            
-            if not factor_mapped:
-                st.warning(f"Could not map factor '{factor_var}' to raw features.")
         
         # Add raw variables (non-factored) directly
         raw_vars = coef_df[coef_df['Type'] == 'Raw']
@@ -261,7 +254,6 @@ def map_factors_to_raw_features_from_step9(coef_df: pd.DataFrame) -> pd.DataFram
             
             return raw_impact_df
         else:
-            st.warning("No raw impacts calculated.")
             return pd.DataFrame()
             
     except Exception as e:
