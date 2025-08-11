@@ -26,8 +26,29 @@ def show_page():
         st.error("❌ No impact data available. Please check that factor analysis was completed successfully.")
         return
     
-    # Filter only selected variables (Impact_% > 0 after exclusion)
-    final_vars = coef_df.loc[coef_df["Impact_%"] > 0, "Variable"].tolist()
+    # Feature selector
+    st.subheader("✅ Select the final set of drivers to include")
+    all_vars = coef_df["Variable"].tolist()
+    
+    # ✅ FIX: Ensure final_vars only contains values that exist in all_vars
+    if "final_vars" not in st.session_state:
+        # Default: all variables with positive impact
+        st.session_state.final_vars = coef_df[coef_df["Impact_%"] > 0]["Variable"].tolist()
+    else:
+        # ✅ CRITICAL FIX: Filter out any values that don't exist in current options
+        st.session_state.final_vars = [var for var in st.session_state.final_vars if var in all_vars]
+    
+    # ✅ Additional safety check: Ensure default values are in options
+    valid_defaults = [var for var in st.session_state.final_vars if var in all_vars]
+    
+    final_vars = st.multiselect(
+        label="Choose variables",
+        options=all_vars,
+        default=valid_defaults,  # ✅ Use validated defaults
+        help="These are the original survey questions that will be reflected in the charts."
+    )
+    
+    st.session_state.final_vars = final_vars
     
     if len(final_vars) == 0:
         st.warning("Select at least one variable to proceed.")
@@ -40,7 +61,7 @@ def show_page():
     st.plotly_chart(bar_fig, use_container_width=True)
     
     st.subheader("🚀 Waterfall – 'What-if' uplift scenarios")
-    wf_fig = make_waterfall_chart(coef_df, final_vars, y)
+    wf_fig = make_waterfall_chart(coef_df, final_vars, y_test)
     st.plotly_chart(wf_fig, use_container_width=True)
     
     st.caption(
@@ -55,11 +76,13 @@ def check_prerequisites():
     X = None
     y = None
     
+    # Get model from various possible locations
     if hasattr(st.session_state, 'last_trained_model'):
         model = st.session_state.last_trained_model
     elif hasattr(st.session_state, 'regression_model'):
         model = st.session_state.regression_model
     
+    # Get from model_results dict
     if hasattr(st.session_state, 'model_results') and st.session_state.model_results:
         results = st.session_state.model_results
         if 'regression_model' in results:
@@ -73,6 +96,7 @@ def check_prerequisites():
     
     if model is None:
         st.error("⚠️ Missing trained model from Step 12.")
+        st.info("Please complete Step 12 (Logistic Regression Analysis) first.")
         return None
     
     if selected_features is None:
@@ -100,62 +124,37 @@ def build_impact_df_with_raw_features(model, selected_features: list) -> pd.Data
         else:
             st.error("Invalid model object - no coefficients found.")
             return pd.DataFrame()
-
-        # Try to get p-values from statsmodels results if available
-        pvalues = [np.nan] * len(selected_features)
-        if 'sm_model_results' in getattr(st.session_state, 'model_results', {}):
-            sm_res = st.session_state.model_results['sm_model_results']
-            if hasattr(sm_res, 'pvalues'):
-                pval_series = sm_res.pvalues
-                pvalues = [pval_series.get(var, np.nan) for var in selected_features]
-
-        # Ensure alignment
+        
+        # Ensure we have the right number of features
         if len(selected_features) != len(betas):
             min_len = min(len(selected_features), len(betas))
             selected_features = selected_features[:min_len]
             betas = betas[:min_len]
-            pvalues = pvalues[:min_len]
-
+        
         base_df = pd.DataFrame({
-            "Variable": selected_features,
+            "Variable": selected_features, 
             "Beta": betas,
-            "p_value": pvalues,
             "Type": ["Factored" if "Factor" in var else "Raw" for var in selected_features]
         })
-
-        # --- User selection ---
-        st.subheader("📌 Logistic Regression Coefficients & p-values")
-        if "var_inclusion" not in st.session_state:
-            st.session_state.var_inclusion = {var: True for var in base_df["Variable"]}
-
-        for idx, row in base_df.iterrows():
-            label = f"{row['Variable']} | Beta={row['Beta']:.4f}"
-            if not np.isnan(row['p_value']):
-                label += f", p={row['p_value']:.4f}"
-            else:
-                label += ", p=N/A"
-
-            current_state = st.session_state.var_inclusion[row["Variable"]]
-            st.session_state.var_inclusion[row["Variable"]] = st.checkbox(label, value=current_state)
-
-        # Apply exclusion: Beta=0 for unchecked vars
-        base_df["Included"] = base_df["Variable"].map(st.session_state.var_inclusion)
-        base_df.loc[~base_df["Included"], "Beta"] = 0
-
-        # Calculate impacts
+        
+        # Calculate impact percentages
         base_df["Abs_Beta"] = base_df["Beta"].abs()
         total_abs_impact = base_df["Abs_Beta"].sum()
+        
         if total_abs_impact == 0:
             base_df["Impact_%"] = 0
         else:
             base_df["Impact_%"] = (base_df["Abs_Beta"] / total_abs_impact) * 100
-
-        # Map to raw features if possible
+        
+        # Try to map factors to raw features using Step 10 loadings
         raw_impacts = map_factors_to_raw_features_from_step10(base_df)
+        
         if raw_impacts.empty:
+            st.info("ℹ️ Using factor variables directly (raw feature mapping not available).")
             return base_df.sort_values("Impact_%", ascending=False).reset_index(drop=True)
+        
         return raw_impacts
-
+        
     except Exception as e:
         st.error(f"Error building impact dataframe: {str(e)}")
         return pd.DataFrame()
@@ -163,17 +162,23 @@ def build_impact_df_with_raw_features(model, selected_features: list) -> pd.Data
 def map_factors_to_raw_features_from_step10(coef_df: pd.DataFrame) -> pd.DataFrame:
     """Map factor impacts to raw features using Step 10's loading data."""
     try:
+        # Check if fa_results is available from Step 10
         if not hasattr(st.session_state, 'fa_results') or st.session_state.fa_results is None:
             return pd.DataFrame()
         
         fa_results = st.session_state.fa_results
+        
+        # Initialize raw impacts dictionary
         raw_impacts = {}
         
+        # Process factored variables
         factored_vars = coef_df[coef_df['Type'] == 'Factored']
         
         for _, row in factored_vars.iterrows():
-            factor_var = row['Variable']
+            factor_var = row['Variable']  # e.g., "Rep Attributes_Factor_1"
             factor_impact = row['Impact_%']
+            
+            # Parse factor variable name to find category and factor number
             factor_mapped = False
             
             for category, results in fa_results.items():
@@ -184,30 +189,46 @@ def map_factors_to_raw_features_from_step10(coef_df: pd.DataFrame) -> pd.DataFra
                 if loadings_df is None or not isinstance(loadings_df, pd.DataFrame):
                     continue
                 
+                # Check if this factor belongs to this category
                 if factor_var.startswith(category + '_Factor_'):
+                    # Extract factor number from variable name 
                     try:
-                        factor_num = int(factor_var.replace(category + '_Factor_', ''))
+                        factor_part = factor_var.replace(category + '_Factor_', '')
+                        factor_num = int(factor_part)
                     except ValueError:
                         continue
                     
+                    # Find the corresponding factor column in loadings
+                    # Try different possible column names
                     possible_factor_cols = [
-                        f"Factor {factor_num}",
-                        f"Factor_{factor_num}",
-                        f"Factor{factor_num}"
+                        f"Factor {factor_num}",  # "Factor 1", "Factor 2", etc.
+                        f"Factor_{factor_num}",  # "Factor_1", "Factor_2", etc.
+                        f"Factor{factor_num}"    # "Factor1", "Factor2", etc.
                     ]
                     
-                    factor_col = next((c for c in possible_factor_cols if c in loadings_df.columns), None)
+                    factor_col = None
+                    for possible_col in possible_factor_cols:
+                        if possible_col in loadings_df.columns:
+                            factor_col = possible_col
+                            break
+                    
                     if factor_col is None:
                         continue
                     
+                    # Get feature names from the index of loadings dataframe
                     feature_names = loadings_df.index.tolist()
+                    
+                    # Calculate total absolute loadings for normalization
                     factor_loadings = loadings_df[factor_col].abs()
                     total_abs_loadings = factor_loadings.sum()
                     
                     if total_abs_loadings > 0:
+                        # Distribute factor impact to raw features based on their loadings
                         for raw_feature in feature_names:
                             loading_value = abs(loadings_df.loc[raw_feature, factor_col])
+                            
                             if loading_value > 0:
+                                # Proportional allocation based on loading strength
                                 weighted_impact = factor_impact * (loading_value / total_abs_loadings)
                                 raw_impacts[raw_feature] = raw_impacts.get(raw_feature, 0) + weighted_impact
                     
@@ -215,18 +236,31 @@ def map_factors_to_raw_features_from_step10(coef_df: pd.DataFrame) -> pd.DataFra
                     break
             
             if not factor_mapped:
+                # If mapping failed, keep the factor name as fallback
                 raw_impacts[factor_var] = raw_impacts.get(factor_var, 0) + factor_impact
         
+        # Add raw variables (non-factored) directly
         raw_vars = coef_df[coef_df['Type'] == 'Raw']
         for _, row in raw_vars.iterrows():
-            raw_impacts[row['Variable']] = raw_impacts.get(row['Variable'], 0) + row['Impact_%']
+            raw_feature = row['Variable']
+            impact = row['Impact_%']
+            raw_impacts[raw_feature] = raw_impacts.get(raw_feature, 0) + impact
         
+        # Convert to DataFrame
         if raw_impacts:
-            raw_impact_df = pd.DataFrame(list(raw_impacts.items()), columns=['Variable', 'Impact_%'])
+            raw_impact_df = pd.DataFrame(
+                list(raw_impacts.items()), 
+                columns=['Variable', 'Impact_%']
+            )
+            
+            # Sort by impact
             raw_impact_df = raw_impact_df.sort_values('Impact_%', ascending=False).reset_index(drop=True)
+            
+            # Ensure impacts sum to 100%
             total_impact = raw_impact_df['Impact_%'].sum()
             if total_impact > 0:
                 raw_impact_df['Impact_%'] = (raw_impact_df['Impact_%'] / total_impact) * 100
+            
             return raw_impact_df
         else:
             return pd.DataFrame()
@@ -236,9 +270,10 @@ def map_factors_to_raw_features_from_step10(coef_df: pd.DataFrame) -> pd.DataFra
         return pd.DataFrame()
 
 def make_impact_bar(impact_df: pd.DataFrame, picked_vars: list):
+    """Horizontal bar chart: top drivers ≥ MIN_OTHER_BUCKET plus 'Others'."""
     try:
         df = impact_df[impact_df["Variable"].isin(picked_vars)].copy()
-        df = df[df["Impact_%"] > 0]
+        df = df[df["Impact_%"] > 0]  # only positive
         df = df.sort_values("Impact_%", ascending=False)
         
         if df.empty:
@@ -249,16 +284,44 @@ def make_impact_bar(impact_df: pd.DataFrame, picked_vars: list):
         others = df[df["Impact_%"] < MIN_OTHER_BUCKET]
         
         if not others.empty:
-            others_row = pd.DataFrame({"Variable": [f"Others ({len(others)})"],"Impact_%": [others["Impact_%"].sum()]})
+            others_row = pd.DataFrame({
+                "Variable": [f"Others ({len(others)})"],
+                "Impact_%": [others["Impact_%"].sum()]
+            })
             plot_df = pd.concat([main, others_row], ignore_index=True)
         else:
             plot_df = main.copy()
         
-        colors = ["#2E86AB" if not v.startswith("Others") else "#A23B72" for v in plot_df["Variable"]]
+        # Create color mapping
+        colors = []
+        for var in plot_df["Variable"]:
+            if var.startswith("Others"):
+                colors.append("#A23B72")  # Others color
+            else:
+                colors.append("#2E86AB")  # Driver color
         
-        fig = px.bar(plot_df, x="Impact_%", y="Variable", orientation="h", text="Impact_%", height=max(400, 40 * len(plot_df)))
-        fig.update_traces(marker_color=colors, texttemplate="%{text:.1f}%", textposition="outside")
-        fig.update_layout(xaxis_title="Impact (%)", yaxis_title="", showlegend=False)
+        fig = px.bar(
+            plot_df,
+            x="Impact_%", y="Variable",
+            orientation="h",
+            text="Impact_%",
+            height=max(400, 40 * len(plot_df)),
+            title="Normalized Impact of Selected Drivers"
+        )
+        
+        # Update colors
+        fig.update_traces(
+            marker_color=colors,
+            texttemplate="%{text:.1f}%", 
+            textposition="outside"
+        )
+        
+        fig.update_layout(
+            xaxis_title="Impact (%)",
+            yaxis_title="",
+            showlegend=False
+        )
+        
         return fig
         
     except Exception as e:
@@ -266,8 +329,14 @@ def make_impact_bar(impact_df: pd.DataFrame, picked_vars: list):
         return go.Figure()
 
 def make_waterfall_chart(impact_df: pd.DataFrame, picked_vars: list, y_target):
+    """Build a 3-column waterfall: current level vs +Top5 vs +Top10."""
     try:
-        current = y_target.mean() if hasattr(y_target, 'mean') else np.mean(y_target)
+        # Calculate current level
+        if hasattr(y_target, 'mean'):
+            current = y_target.mean()
+        else:
+            current = np.mean(y_target)
+        
         df = impact_df[impact_df["Variable"].isin(picked_vars)].copy()
         df = df.sort_values("Impact_%", ascending=False)
         
@@ -275,25 +344,58 @@ def make_waterfall_chart(impact_df: pd.DataFrame, picked_vars: list, y_target):
             st.warning("No variables available for waterfall chart.")
             return go.Figure()
         
+        # Calculate impacts for top N
         impacts = []
         for n in TOP_N_LIST:
             top_n = df.head(n)
-            uplift = top_n["Impact_%"].sum() / 100
-            scaled_uplift = uplift * 0.1
+            uplift = top_n["Impact_%"].sum() / 100  # Convert % to proportion
+            # Scale the uplift (assuming 10% improvement in drivers leads to this impact)
+            scaled_uplift = uplift * 0.1  # 10% improvement factor
             impacts.append(scaled_uplift)
         
         levels = [current, current + impacts[0], current + impacts[1]]
-        labels = ["Current Level", f"10% ↑ in Top {TOP_N_LIST[0]}", f"10% ↑ in Top {TOP_N_LIST[1]}"]
+        labels = [
+            "Current Level",
+            f"10% ↑ in Top {TOP_N_LIST[0]}",
+            f"10% ↑ in Top {TOP_N_LIST[1]}"
+        ]
         
         fig = go.Figure()
         colors = ["#3E4B8B", "#28A745", "#17A2B8"]
         
         for i, (lab, val) in enumerate(zip(labels, levels)):
-            fig.add_trace(go.Bar(x=[lab], y=[val * 100], marker_color=colors[i], text=[f"{val*100:.1f}%"], textposition="outside", width=0.5))
+            fig.add_trace(go.Bar(
+                x=[lab], 
+                y=[val * 100],  # Show as percentage
+                marker_color=colors[i],
+                text=[f"{val*100:.1f}%"],
+                textposition="outside",
+                width=0.5
+            ))
         
-        fig.update_layout(title="Projected Lift with Driver Optimization", yaxis_title="Top-2-Box Level (%)", xaxis_title="Scenario", showlegend=False, bargap=0.6, height=500)
+        # Add connecting lines
+        for i in range(len(levels) - 1):
+            fig.add_annotation(
+                x=i + 0.5, y=levels[i] * 100,
+                ax=i, ay=levels[i] * 100,
+                xref="x", yref="y",
+                axref="x", ayref="y",
+                showarrow=True, arrowhead=2, arrowsize=1,
+                arrowcolor="gray"
+            )
+        
+        fig.update_layout(
+            title="Projected Lift with Driver Optimization",
+            yaxis_title="Top-2-Box Level (%)",
+            xaxis_title="Scenario",
+            showlegend=False,
+            bargap=0.6,
+            height=500
+        )
+        
         max_val = max([v*100 for v in levels])
         fig.update_yaxes(range=[0, max_val * 1.15])
+        
         return fig
         
     except Exception as e:
