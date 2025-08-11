@@ -291,11 +291,7 @@ def perform_factor_analysis(data, n_factors, rotation='varimax'):
         
         return {
             'success': True,
-            'loadings': pd.DataFrame(
-                final_loadings,
-                columns=[f'Factor_{i+1}' for i in range(n_factors)],
-                index=data.index
-            ),
+            'loadings': final_loadings,
             'factor_scores': pd.DataFrame(
                 final_scores,
                 columns=[f'Factor_{i+1}' for i in range(n_factors)],
