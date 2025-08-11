@@ -6,7 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # ---------- CONFIG ----------
-MIN_OTHER_BUCKET = 5.0  # % threshold below which drivers are grouped as "Others"
+MIN_OTHER_BUCKET = 0.0  # % threshold below which drivers are grouped as "Others"
 TOP_N_LIST = [5, 10]    # for the waterfall scenarios
 
 def show_page():
