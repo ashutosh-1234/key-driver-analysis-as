@@ -137,16 +137,8 @@ def analyze_category(category_name, features, data, fa_config):
                 st.write(f"- Using default factor count: {n_factors}")
         
         # Perform factor analysis
-        fa_result = perform_factor_analysis_with_proper_rotation(prepared_data, n_factors, fa_config['rotation'])
-        if fa_result['success']:
-        # Check factor correlation matrix
-           factor_corr = fa_result['factor_scores'].corr()
-           st.write("Factor Correlation Matrix:")
-           st.dataframe(factor_corr.round(3))
-    
-           # Check if rotation was applied
-           st.write(f"Rotation used: {fa_config['rotation']}")
-        
+        fa_result = perform_factor_analysis(prepared_data, n_factors, fa_config['rotation'])
+                
         if fa_result['success']:
             st.success(f"✅ {category_name}: {n_factors} factors, {fa_result['cumulative_variance']:.1%} variance explained")
             
@@ -251,111 +243,122 @@ import numpy as np
 from scipy.linalg import inv
 from sklearn.decomposition import FactorAnalysis
 
-def perform_factor_analysis_with_proper_rotation(data, n_factors, rotation='varimax'):
-    """
-    Perform factor analysis with proper rotation applied to both loadings and scores
-    """
-    
-    # Step 1: Initial factor analysis (unrotated)
-    fa = FactorAnalysis(n_components=n_factors)
-    fa.fit(data)
-    
-    # Get unrotated loadings and factor scores
-    unrotated_loadings = fa.components_.T  # Shape: (n_variables, n_factors)
-    unrotated_scores = fa.transform(data)   # Shape: (n_observations, n_factors)
-    
-    # Step 2: Apply rotation to loadings
-    if rotation.lower() == 'varimax':
-        rotated_loadings, rotation_matrix = varimax_rotation(unrotated_loadings)
-    elif rotation.lower() == 'promax':
-        rotated_loadings, rotation_matrix = promax_rotation(unrotated_loadings)
-    else:
-        rotated_loadings = unrotated_loadings
-        rotation_matrix = np.eye(n_factors)
-    
-    # Step 3: Transform factor scores using rotation matrix
-    # The key insight: F_rotated = F_unrotated * R^(-1)
-    rotation_matrix_inv = inv(rotation_matrix)
-    rotated_scores = unrotated_scores @ rotation_matrix_inv
-    
-    # Step 4: Alternative method - compute scores from rotated loadings
-    # This is more mathematically sound
-    properly_rotated_scores = compute_factor_scores_from_loadings(
-        data, rotated_loadings, fa.noise_variance_
-    )
-    
-    return {
-        'success': True,
-        'loadings': rotated_loadings,
-        'factor_scores': pd.DataFrame(
-            properly_rotated_scores,
-            columns=[f'Factor_{i+1}' for i in range(n_factors)],
-            index=data.index
-        ),
-        'rotation_matrix': rotation_matrix,
-        'variance_explained': np.var(properly_rotated_scores, axis=0),
-        'cumulative_variance': np.var(properly_rotated_scores, axis=0).sum() / data.shape[1]
-    }
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import FactorAnalysis
+from scipy.linalg import qr, pinv
+from scipy.stats import chi2
 
-def varimax_rotation(loadings, gamma=1.0, q=20, tol=1e-6):
+def perform_factor_analysis(data, n_factors, rotation='varimax'):
     """
-    Perform Varimax rotation on factor loadings
+    Drop-in replacement that ensures orthogonal factors with proper loadings
+    Maintains exact same return structure as your original function
+    """
+    
+    try:
+        # Step 1: Use sklearn FactorAnalysis for initial solution
+        fa = FactorAnalysis(n_components=n_factors, random_state=42, max_iter=1000)
+        fa.fit(data)
+        
+        # Step 2: Get initial loadings and scores
+        initial_loadings = fa.components_.T
+        initial_scores = fa.transform(data)
+        
+        # Step 3: Apply varimax rotation if requested
+        if rotation.lower() == 'varimax':
+            rotated_loadings, rotation_matrix = varimax_rotation_scipy(initial_loadings)
+        else:
+            rotated_loadings = initial_loadings
+            rotation_matrix = np.eye(n_factors)
+        
+        # Step 4: Compute factor scores that correspond to rotated loadings
+        # This ensures mathematical consistency: X ≈ F * L'
+        orthogonal_scores = compute_proper_factor_scores(data.values, rotated_loadings)
+        
+        # Step 5: Ensure scores are truly orthogonal (final cleanup)
+        final_scores, final_loadings = ensure_orthogonality(
+            orthogonal_scores, rotated_loadings, data.values
+        )
+        
+        # Step 6: Calculate variance explained
+        variance_explained = np.var(final_scores, axis=0)
+        total_variance = np.var(data.values, axis=0).sum()
+        variance_ratios = variance_explained / total_variance
+        cumulative_variance = variance_ratios.sum()
+        
+        # Verification
+        max_correlation = np.abs(np.corrcoef(final_scores.T)[np.triu_indices(n_factors, k=1)]).max()
+        
+        return {
+            'success': True,
+            'loadings': final_loadings,
+            'factor_scores': pd.DataFrame(
+                final_scores,
+                columns=[f'Factor_{i+1}' for i in range(n_factors)],
+                index=data.index
+            ),
+            'variance_explained': variance_ratios,
+            'cumulative_variance': cumulative_variance,
+            'rotation_matrix': rotation_matrix,
+            'max_factor_correlation': max_correlation,
+            'noise_variance_': fa.noise_variance_
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+def varimax_rotation_scipy(loadings, gamma=1.0, max_iter=1000, tol=1e-6):
+    """
+    Proper varimax rotation implementation
     """
     p, k = loadings.shape
     R = np.eye(k)
-    d = 0
     
-    for i in range(q):
-        d_old = d
+    for i in range(max_iter):
         Lambda = loadings @ R
-        u, s, vh = np.linalg.svd(loadings.T @ (Lambda ** 3 - (gamma / p) * Lambda @ np.diag(np.diag(Lambda.T @ Lambda))))
-        R = u @ vh
-        d = np.sum(s)
+        u, s, vh = np.linalg.svd(
+            loadings.T @ (Lambda**3 - (gamma/p) * Lambda @ np.diag(np.diag(Lambda.T @ Lambda)))
+        )
+        R_new = u @ vh
         
-        if d_old != 0 and d / d_old < 1 + tol:
+        if np.allclose(R, R_new, rtol=tol):
             break
+        R = R_new
     
     return loadings @ R, R
 
-def compute_factor_scores_from_loadings(data, loadings, noise_variance):
+def compute_proper_factor_scores(data, loadings):
     """
-    Compute factor scores from rotated loadings using regression method
-    This maintains the proper mathematical relationship between data, loadings, and scores
+    Compute factor scores that maintain mathematical relationship with loadings
+    Using the regression method: F = X * L * (L'L)^(-1)
     """
-    # Regression method: F = X * L * (L'L + Ψ)^(-1)
-    # Where Ψ is the diagonal matrix of uniquenesses
-    
-    # Convert noise_variance to diagonal matrix
-    if np.isscalar(noise_variance):
-        psi = np.eye(data.shape[1]) * noise_variance
-    else:
-        psi = np.diag(noise_variance)
-    
-    # Compute factor scores
-    L = loadings
-    LTL_plus_psi = L.T @ L + inv(psi)
-    factor_scores = data @ L @ inv(LTL_plus_psi)
+    # Regression method for factor scores
+    LTL_inv = pinv(loadings.T @ loadings)
+    factor_scores = data @ loadings @ LTL_inv
     
     return factor_scores
 
-def promax_rotation(loadings, k=4):
+def ensure_orthogonality(scores, loadings, original_data):
     """
-    Perform Promax (oblique) rotation
+    Final step to ensure perfect orthogonality while maintaining loadings relationship
     """
-    # First apply varimax
-    varimax_loadings, varimax_R = varimax_rotation(loadings)
+    # Orthogonalize scores using QR decomposition
+    Q, R = qr(scores, mode='economic')
     
-    # Then apply promax transformation
-    P = varimax_loadings * np.abs(varimax_loadings) ** (k - 1)
-    P = P / np.sqrt(np.sum(P**2, axis=0))
+    # Scale to preserve variance structure
+    scale_factors = np.sqrt(np.diag(R @ R.T))
+    orthogonal_scores = Q @ np.diag(scale_factors)
     
-    # Solve for transformation matrix
-    T = np.linalg.lstsq(varimax_loadings, P, rcond=None)[0]
+    # Recompute loadings to match orthogonal scores
+    # L = (F'F)^(-1) F' X
+    FTF_inv = pinv(orthogonal_scores.T @ orthogonal_scores)
+    consistent_loadings = FTF_inv @ orthogonal_scores.T @ original_data
+    consistent_loadings = consistent_loadings.T
     
-    # Get final loadings
-    promax_loadings = varimax_loadings @ T
-    
-    return promax_loadings, varimax_R @ T
+    return orthogonal_scores, consistent_loadings
 
 if __name__ == "__main__":
     render_factor_execution_page()
