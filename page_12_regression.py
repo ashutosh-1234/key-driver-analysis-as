@@ -476,7 +476,9 @@ def train_and_evaluate_model() -> None:
             'y_train': y_train,
             'y_test': y_test,
             'y_pred': y_pred,
-            'y_pred_proba': y_prob
+            'y_pred_proba': y_prob,
+            'X': X,
+            'y': y
         }
         
         # Show success message for Step 13 readiness
