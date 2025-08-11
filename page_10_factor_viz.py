@@ -143,7 +143,7 @@ def create_loadings_heatmap(category_name, results):
 
     # Create heatmap
     fig = go.Figure(data=go.Heatmap(
-        z=loadings.abs().values,
+        z=loadings.values,
         x=loadings.columns,
         y=loadings.index,
         colorscale='RdYlBu_r',
