@@ -61,7 +61,7 @@ def show_page():
     st.plotly_chart(bar_fig, use_container_width=True)
     
     st.subheader("🚀 Waterfall – 'What-if' uplift scenarios")
-    wf_fig = make_waterfall_chart(coef_df, final_vars, y_test)
+    wf_fig = make_waterfall_chart(coef_df, final_vars, y)
     st.plotly_chart(wf_fig, use_container_width=True)
     
     st.caption(
