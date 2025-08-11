@@ -137,7 +137,15 @@ def analyze_category(category_name, features, data, fa_config):
                 st.write(f"- Using default factor count: {n_factors}")
         
         # Perform factor analysis
-        fa_result = perform_factor_analysis(prepared_data, n_factors, fa_config['rotation'])
+        fa_result = perform_factor_analysis_with_proper_rotation(prepared_data, n_factors, fa_config['rotation'])
+        if fa_result['success']:
+        # Check factor correlation matrix
+           factor_corr = fa_result['factor_scores'].corr()
+           st.write("Factor Correlation Matrix:")
+           st.dataframe(factor_corr.round(3))
+    
+           # Check if rotation was applied
+           st.write(f"Rotation used: {fa_config['rotation']}")
         
         if fa_result['success']:
             st.success(f"✅ {category_name}: {n_factors} factors, {fa_result['cumulative_variance']:.1%} variance explained")
@@ -238,6 +246,116 @@ def display_execution_summary(fa_results):
         st.info("📌 Factor analysis completed successfully! Click 'Next ➡️' to proceed to results visualization.")
     else:
         st.error("❌ No successful factor analyses. Please review your data and configuration.")
+
+import numpy as np
+from scipy.linalg import inv
+from sklearn.decomposition import FactorAnalysis
+
+def perform_factor_analysis_with_proper_rotation(data, n_factors, rotation='varimax'):
+    """
+    Perform factor analysis with proper rotation applied to both loadings and scores
+    """
+    
+    # Step 1: Initial factor analysis (unrotated)
+    fa = FactorAnalysis(n_components=n_factors)
+    fa.fit(data)
+    
+    # Get unrotated loadings and factor scores
+    unrotated_loadings = fa.components_.T  # Shape: (n_variables, n_factors)
+    unrotated_scores = fa.transform(data)   # Shape: (n_observations, n_factors)
+    
+    # Step 2: Apply rotation to loadings
+    if rotation.lower() == 'varimax':
+        rotated_loadings, rotation_matrix = varimax_rotation(unrotated_loadings)
+    elif rotation.lower() == 'promax':
+        rotated_loadings, rotation_matrix = promax_rotation(unrotated_loadings)
+    else:
+        rotated_loadings = unrotated_loadings
+        rotation_matrix = np.eye(n_factors)
+    
+    # Step 3: Transform factor scores using rotation matrix
+    # The key insight: F_rotated = F_unrotated * R^(-1)
+    rotation_matrix_inv = inv(rotation_matrix)
+    rotated_scores = unrotated_scores @ rotation_matrix_inv
+    
+    # Step 4: Alternative method - compute scores from rotated loadings
+    # This is more mathematically sound
+    properly_rotated_scores = compute_factor_scores_from_loadings(
+        data, rotated_loadings, fa.noise_variance_
+    )
+    
+    return {
+        'success': True,
+        'loadings': rotated_loadings,
+        'factor_scores': pd.DataFrame(
+            properly_rotated_scores,
+            columns=[f'Factor_{i+1}' for i in range(n_factors)],
+            index=data.index
+        ),
+        'rotation_matrix': rotation_matrix,
+        'variance_explained': np.var(properly_rotated_scores, axis=0),
+        'cumulative_variance': np.var(properly_rotated_scores, axis=0).sum() / data.shape[1]
+    }
+
+def varimax_rotation(loadings, gamma=1.0, q=20, tol=1e-6):
+    """
+    Perform Varimax rotation on factor loadings
+    """
+    p, k = loadings.shape
+    R = np.eye(k)
+    d = 0
+    
+    for i in range(q):
+        d_old = d
+        Lambda = loadings @ R
+        u, s, vh = np.linalg.svd(loadings.T @ (Lambda ** 3 - (gamma / p) * Lambda @ np.diag(np.diag(Lambda.T @ Lambda))))
+        R = u @ vh
+        d = np.sum(s)
+        
+        if d_old != 0 and d / d_old < 1 + tol:
+            break
+    
+    return loadings @ R, R
+
+def compute_factor_scores_from_loadings(data, loadings, noise_variance):
+    """
+    Compute factor scores from rotated loadings using regression method
+    This maintains the proper mathematical relationship between data, loadings, and scores
+    """
+    # Regression method: F = X * L * (L'L + Ψ)^(-1)
+    # Where Ψ is the diagonal matrix of uniquenesses
+    
+    # Convert noise_variance to diagonal matrix
+    if np.isscalar(noise_variance):
+        psi = np.eye(data.shape[1]) * noise_variance
+    else:
+        psi = np.diag(noise_variance)
+    
+    # Compute factor scores
+    L = loadings
+    LTL_plus_psi = L.T @ L + inv(psi)
+    factor_scores = data @ L @ inv(LTL_plus_psi)
+    
+    return factor_scores
+
+def promax_rotation(loadings, k=4):
+    """
+    Perform Promax (oblique) rotation
+    """
+    # First apply varimax
+    varimax_loadings, varimax_R = varimax_rotation(loadings)
+    
+    # Then apply promax transformation
+    P = varimax_loadings * np.abs(varimax_loadings) ** (k - 1)
+    P = P / np.sqrt(np.sum(P**2, axis=0))
+    
+    # Solve for transformation matrix
+    T = np.linalg.lstsq(varimax_loadings, P, rcond=None)[0]
+    
+    # Get final loadings
+    promax_loadings = varimax_loadings @ T
+    
+    return promax_loadings, varimax_R @ T
 
 if __name__ == "__main__":
     render_factor_execution_page()
