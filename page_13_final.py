@@ -17,7 +17,7 @@ def show_page():
     if not required_data:
         return
         
-    model, X_test, y_test, selected_features = required_data
+    model, X, y, selected_features = required_data
     
     # Build impact dataframe - mapping to raw features using Step 10 loadings
     coef_df = build_impact_df_with_raw_features(model, selected_features)
@@ -73,8 +73,8 @@ def check_prerequisites():
     """Check for required data from Step 12."""
     model = None
     selected_features = None
-    X_test = None
-    y_test = None
+    X = None
+    y = None
     
     # Get model from various possible locations
     if hasattr(st.session_state, 'last_trained_model'):
@@ -89,10 +89,10 @@ def check_prerequisites():
             model = results['regression_model']
         if 'selected_features' in results:
             selected_features = results['selected_features']
-        if 'X_test' in results:
-            X_test = results['X_test']
-        if 'y_test' in results:
-            y_test = results['y_test']
+        if 'X' in results:
+            X = results['X']
+        if 'y' in results:
+            y = results['y']
     
     if model is None:
         st.error("⚠️ Missing trained model from Step 12.")
@@ -106,14 +106,14 @@ def check_prerequisites():
             st.error("⚠️ Missing selected features information.")
             return None
     
-    if y_test is None:
+    if y is None:
         if hasattr(st.session_state, 'y_target'):
-            y_test = st.session_state.y_target
+            y = st.session_state.y_target
         else:
             st.error("⚠️ Missing target variable data.")
             return None
     
-    return model, X_test, y_test, selected_features
+    return model, X, y, selected_features
 
 def build_impact_df_with_raw_features(model, selected_features: list) -> pd.DataFrame:
     """Build impact dataframe mapping factors back to raw features using Step 10 loadings."""
